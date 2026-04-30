@@ -1,0 +1,47 @@
+import org.gradle.api.artifacts.repositories.MavenArtifactRepository
+
+def GOOGLE_MIRROR = uri('https://maven.aliyun.com/repository/google')
+def MAVEN_CENTRAL_MIRROR = uri('https://maven.aliyun.com/repository/central')
+def GRADLE_PLUGIN_MIRROR = uri('https://maven.aliyun.com/repository/gradle-plugin')
+
+def rewriteRepository = { repo ->
+  if (!(repo instanceof MavenArtifactRepository)) {
+    return
+  }
+
+  def url = repo.url?.toString() ?: ''
+
+  if (
+    url.contains('dl.google.com/dl/android/maven2') ||
+    url.contains('google()') ||
+    url.endsWith('/google')
+  ) {
+    repo.setUrl(GOOGLE_MIRROR)
+    return
+  }
+
+  if (
+    url.contains('repo.maven.apache.org/maven2') ||
+    url.contains('repo1.maven.org/maven2') ||
+    url.endsWith('/central')
+  ) {
+    repo.setUrl(MAVEN_CENTRAL_MIRROR)
+    return
+  }
+
+  if (url.contains('plugins.gradle.org/m2')) {
+    repo.setUrl(GRADLE_PLUGIN_MIRROR)
+  }
+}
+
+settingsEvaluated { settings ->
+  settings.pluginManagement.repositories.all(rewriteRepository)
+  settings.pluginManagement.repositories.whenObjectAdded(rewriteRepository)
+}
+
+gradle.beforeProject { project ->
+  project.buildscript.repositories.all(rewriteRepository)
+  project.buildscript.repositories.whenObjectAdded(rewriteRepository)
+  project.repositories.all(rewriteRepository)
+  project.repositories.whenObjectAdded(rewriteRepository)
+}

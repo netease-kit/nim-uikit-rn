@@ -1,0 +1,19 @@
+{
+  "name": "im-feature-foundation-portable",
+  "source_skill": "skills/im-feature-foundation",
+  "exported_directory_name": "im-feature-foundation",
+  "includes": [
+    "SKILL.md",
+    "README.md",
+    "evals/",
+    "references/"
+  ],
+  "validation_examples": [
+    "/tmp/im-foundation-validation-expo",
+    "/tmp/im-foundation-validation-web"
+  ],
+  "notes": [
+    "This package is a portable distribution wrapper for the cross-project IM mother skill.",
+    "Use the export script to create a clean copy for another repository."
+  ]
+}

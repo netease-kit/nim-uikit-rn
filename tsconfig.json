@@ -1,0 +1,21 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "paths": {
+      "@/*": ["./*", "./src/*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
+  "exclude": [
+    "src/NEUIKit/chat/**",
+    "src/NEUIKit/common/**",
+    "src/NEUIKit/contact/**",
+    "src/NEUIKit/conversation/**",
+    "src/NEUIKit/friend/**",
+    "src/NEUIKit/login/**",
+    "src/NEUIKit/static/**",
+    "src/NEUIKit/team/**",
+    "src/NEUIKit/user/**"
+  ]
+}

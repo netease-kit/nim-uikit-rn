@@ -1,11 +1,15 @@
+import { useNavigation } from '@react-navigation/native'
+import { StackActions } from '@react-navigation/routers'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React, { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { useNavigationLock } from '@/hooks/useNavigationLock'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import {
-  getUIKitAppellation,
   UIKitActionCell,
   UIKitIcon,
   UIKitInfoRow,
@@ -14,34 +18,111 @@ import {
   UIKitSwitchRow,
   UIKitUserAvatar
 } from '@/src/NEUIKit/rn'
-import { conversationStore, friendStore, teamStore, userStore } from '@/stores'
 import {
-  V2NIMTeamAgreeMode,
+  conversationStore,
+  friendStore,
+  getTeamCategory,
+  imStoreV2Bridge,
+  messageStore,
+  nimStore,
+  TEAM_CATEGORY,
+  teamStore,
+  userStore
+} from '@/stores'
+import { getDisplayErrorMessage } from '@/utils/error-message'
+import { ensureNetworkAvailable, getConfirmedOfflineMessage } from '@/utils/network'
+import {
   V2NIMTeamChatBannedMode,
   V2NIMTeamInviteMode,
-  V2NIMTeamMemberRole,
-  V2NIMTeamUpdateInfoMode
+  V2NIMTeamMember,
+  V2NIMTeamMemberRole
 } from '@/utils/nim-sdk'
 
-function getInviteModeLabel(inviteMode?: number) {
-  return inviteMode === V2NIMTeamInviteMode.V2NIM_TEAM_INVITE_MODE_ALL ? '所有人' : '群主/管理员'
+function getConversationForSettings(conversationId: string) {
+  return (
+    imStoreV2Bridge.getConversation(conversationId) ||
+    conversationStore.getConversation(conversationId)
+  )
 }
 
-function getUpdateInfoModeLabel(updateInfoMode?: number) {
-  return updateInfoMode === V2NIMTeamUpdateInfoMode.V2NIM_TEAM_UPDATE_INFO_MODE_ALL
-    ? '所有人'
-    : '群主/管理员'
+function getConversationMutationStore() {
+  const preferCloudConversation = !!imStoreV2Bridge.rootStore?.sdkOptions?.enableV2CloudConversation
+  const localConversationStore = imStoreV2Bridge.rootStore?.localConversationStore
+  const cloudConversationStore = imStoreV2Bridge.rootStore?.conversationStore
+
+  if (preferCloudConversation && cloudConversationStore) {
+    return cloudConversationStore
+  }
+
+  return localConversationStore || cloudConversationStore || null
 }
 
-function getAgreeModeLabel(agreeMode?: number) {
-  return agreeMode === V2NIMTeamAgreeMode.V2NIM_TEAM_AGREE_MODE_NO_AUTH ? '不需要' : '需要'
+type TeamExitNavigation = {
+  getState: () =>
+    | {
+        routes: {
+          params?: unknown
+        }[]
+      }
+    | undefined
+  dispatch: (action: ReturnType<typeof StackActions.pop>) => void
+}
+
+function returnAfterTeamExit(navigation: TeamExitNavigation, conversationId: string) {
+  const routes = navigation.getState()?.routes
+
+  if (!routes?.length) {
+    router.replace('/(tabs)' as never)
+    return
+  }
+
+  const previousRoute = routes[routes.length - 2]
+  const previousRouteConversationId =
+    typeof previousRoute?.params === 'object' &&
+    previousRoute.params &&
+    'id' in previousRoute.params &&
+    typeof previousRoute.params.id === 'string'
+      ? previousRoute.params.id
+      : ''
+  const popCount = previousRouteConversationId === conversationId ? 2 : 1
+
+  if (routes.length > popCount) {
+    navigation.dispatch(StackActions.pop(popCount))
+    return
+  }
+
+  router.replace('/(tabs)' as never)
+}
+
+async function deleteTeamConversationData(conversationId: string) {
+  if (!conversationId) {
+    return
+  }
+
+  const conversationMutationStore = getConversationMutationStore()
+  conversationMutationStore?.removeConversation?.([conversationId])
+
+  const nim = nimStore.nim
+
+  if (nim) {
+    if (imStoreV2Bridge.preferCloudConversation) {
+      await nim.V2NIMConversationService.deleteConversation(conversationId, true)
+    } else {
+      await nim.V2NIMLocalConversationService.deleteConversation(conversationId, true)
+    }
+  }
+
+  conversationStore.removeTeamConversationLocally(conversationId)
+  messageStore.clearConversationMessages(conversationId)
 }
 
 const TeamSettingsScreen = observer(() => {
+  const { t } = useAppTranslation()
   const { teamId, conversationId } = useLocalSearchParams<{
     teamId?: string
     conversationId?: string
   }>()
+  const navigation = useNavigation()
   const resolvedTeamId = typeof teamId === 'string' ? teamId : ''
   const resolvedConversationId = typeof conversationId === 'string' ? conversationId : ''
   const team = teamStore.getTeam(resolvedTeamId)
@@ -49,11 +130,39 @@ const TeamSettingsScreen = observer(() => {
   const myRole = teamStore.getMyMemberRole(resolvedTeamId)
   const [loading, setLoading] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
+  const [savingMute, setSavingMute] = useState(false)
+  const [savingStickTop, setSavingStickTop] = useState(false)
+  const [savingChatBanned, setSavingChatBanned] = useState(false)
+  const { runWithNavigationLock } = useNavigationLock()
 
-  const canManageTeam = myRole !== V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_NORMAL
   const isOwner = myRole === V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_OWNER
+  const canManageTeam = myRole !== V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_NORMAL
+  const memberCount = team?.memberCount || members.length
+  const memberLimit = team?.memberLimit || 0
+  const isMemberLimitReached = memberLimit > 0 && memberCount >= memberLimit
   const canInviteMembers =
-    canManageTeam || team?.inviteMode === V2NIMTeamInviteMode.V2NIM_TEAM_INVITE_MODE_ALL
+    !isMemberLimitReached &&
+    (canManageTeam || team?.inviteMode === V2NIMTeamInviteMode.V2NIM_TEAM_INVITE_MODE_ALL)
+  const isDiscussion = getTeamCategory(team) === TEAM_CATEGORY.DISCUSSION
+  const settingsCopy = {
+    avatarLabel: isDiscussion ? t('teamSettingsDiscussionAvatar') : t('teamSettingsAvatar'),
+    dangerAction: isDiscussion
+      ? t('teamSettingsExitDiscussion')
+      : isOwner
+        ? t('teamSettingsDismissGroup')
+        : t('teamSettingsExitGroup'),
+    dangerConfirm: isDiscussion
+      ? t('teamSettingsExitDiscussionConfirm')
+      : isOwner
+        ? t('teamSettingsDismissGroupConfirm')
+        : t('teamSettingsExitGroupConfirm'),
+    dangerConfirmAction: isDiscussion || !isOwner ? t('commonExit') : t('commonDismiss'),
+    nameLabel: isDiscussion ? t('teamSettingsDiscussionName') : t('teamSettingsName'),
+    typeLabel: isDiscussion ? t('teamTypeDiscussion') : t('teamTypeAdvanced'),
+    memberLabel: isDiscussion
+      ? t('teamSettingsDiscussionMemberCount')
+      : t('teamSettingsMemberCount')
+  }
 
   const loadTeamDetails = useCallback(async () => {
     if (!resolvedTeamId) {
@@ -70,155 +179,188 @@ const TeamSettingsScreen = observer(() => {
       ])
     } catch (error) {
       setLoadFailed(true)
-      Alert.alert('加载失败', error instanceof Error ? error.message : '群设置加载失败')
+      toast.alert(
+        t('commonLoadingFailed'),
+        getDisplayErrorMessage(error, t('teamSettingsLoadFailed'))
+      )
     } finally {
       setLoading(false)
     }
-  }, [resolvedTeamId])
+  }, [resolvedTeamId, t])
 
   useEffect(() => {
     loadTeamDetails().catch(() => undefined)
   }, [loadTeamDetails])
 
+  useEffect(() => {
+    if (!nimStore.nim || !resolvedTeamId) {
+      return
+    }
+
+    const hasCurrentTeamMember = (teamMembers: V2NIMTeamMember[]) =>
+      teamMembers.some((member) => member.teamId === resolvedTeamId)
+    const refreshCurrentTeamInfo = (teamLike?: { teamId?: string } | null) => {
+      if (teamLike?.teamId === resolvedTeamId) {
+        loadTeamDetails().catch(() => undefined)
+      }
+    }
+    const refreshCurrentTeamMembers = (teamMembers: V2NIMTeamMember[]) => {
+      if (hasCurrentTeamMember(teamMembers)) {
+        loadTeamDetails().catch(() => undefined)
+      }
+    }
+    const refreshCurrentTeamMembersWithOperator = (
+      _operateAccountId: string,
+      teamMembers: V2NIMTeamMember[]
+    ) => {
+      refreshCurrentTeamMembers(teamMembers)
+    }
+    const refreshCurrentTeamMemberInfo = (teamMembers: V2NIMTeamMember[]) => {
+      if (hasCurrentTeamMember(teamMembers)) {
+        teamStore.applyTeamMembers(teamMembers)
+        loadTeamDetails().catch(() => undefined)
+      }
+    }
+
+    nimStore.nim.V2NIMTeamService.on('onTeamInfoUpdated', refreshCurrentTeamInfo)
+    nimStore.nim.V2NIMTeamService.on('onTeamMemberJoined', refreshCurrentTeamMembers)
+    nimStore.nim.V2NIMTeamService.on('onTeamMemberKicked', refreshCurrentTeamMembersWithOperator)
+    nimStore.nim.V2NIMTeamService.on('onTeamMemberLeft', refreshCurrentTeamMembers)
+    nimStore.nim.V2NIMTeamService.on('onTeamMemberInfoUpdated', refreshCurrentTeamMemberInfo)
+
+    return () => {
+      nimStore.nim?.V2NIMTeamService.off('onTeamInfoUpdated', refreshCurrentTeamInfo)
+      nimStore.nim?.V2NIMTeamService.off('onTeamMemberJoined', refreshCurrentTeamMembers)
+      nimStore.nim?.V2NIMTeamService.off(
+        'onTeamMemberKicked',
+        refreshCurrentTeamMembersWithOperator
+      )
+      nimStore.nim?.V2NIMTeamService.off('onTeamMemberLeft', refreshCurrentTeamMembers)
+      nimStore.nim?.V2NIMTeamService.off('onTeamMemberInfoUpdated', refreshCurrentTeamMemberInfo)
+    }
+  }, [loadTeamDetails, resolvedTeamId])
+
   const handleToggleMute = async (value: boolean) => {
+    if (savingMute) {
+      return
+    }
+
     try {
+      setSavingMute(true)
+      await ensureNetworkAvailable()
       await conversationStore.toggleMute(resolvedConversationId, !value)
+      await imStoreV2Bridge.refreshCurrentConversationSource()
     } catch (error) {
-      Alert.alert('设置失败', error instanceof Error ? error.message : '请稍后重试')
+      const offlineMessage = await getConfirmedOfflineMessage()
+      toast.alert(
+        t('settingsUpdateFailed'),
+        offlineMessage || getDisplayErrorMessage(error, t('commonRetryLater'))
+      )
+    } finally {
+      setSavingMute(false)
     }
   }
 
   const handleToggleStickTop = async (value: boolean) => {
+    if (savingStickTop) {
+      return
+    }
+
     try {
+      setSavingStickTop(true)
+      await ensureNetworkAvailable()
+      const conversationMutationStore = getConversationMutationStore()
+
+      if (conversationMutationStore) {
+        await imStoreV2Bridge.stickTopActiveConversation(resolvedConversationId, value)
+        return
+      }
+
       await conversationStore.toggleStickTop(resolvedConversationId, value)
     } catch (error) {
-      Alert.alert('设置失败', error instanceof Error ? error.message : '请稍后重试')
+      const offlineMessage = await getConfirmedOfflineMessage()
+      toast.alert(
+        t('settingsUpdateFailed'),
+        offlineMessage || getDisplayErrorMessage(error, t('commonRetryLater'))
+      )
+    } finally {
+      setSavingStickTop(false)
     }
   }
 
   const handleToggleChatBanned = async (value: boolean) => {
+    if (savingChatBanned) {
+      return
+    }
+
     try {
-      await teamStore.updateTeamInfo(resolvedTeamId, {
-        chatBannedMode: value
+      setSavingChatBanned(true)
+      await ensureNetworkAvailable()
+      await teamStore.setChatBannedMode(
+        resolvedTeamId,
+        value
           ? V2NIMTeamChatBannedMode.V2NIM_TEAM_CHAT_BANNED_MODE_BANNED_NORMAL
           : V2NIMTeamChatBannedMode.V2NIM_TEAM_CHAT_BANNED_MODE_UNBAN
-      })
+      )
     } catch (error) {
-      Alert.alert('设置失败', error instanceof Error ? error.message : '请稍后重试')
+      const offlineMessage = await getConfirmedOfflineMessage()
+      toast.alert(
+        t('settingsUpdateFailed'),
+        offlineMessage || getDisplayErrorMessage(error, t('commonRetryLater'))
+      )
+    } finally {
+      setSavingChatBanned(false)
     }
-  }
-
-  const updateTeamMeta = async (params: Record<string, number>) => {
-    try {
-      await teamStore.updateTeamInfo(resolvedTeamId, params)
-    } catch (error) {
-      Alert.alert('设置失败', error instanceof Error ? error.message : '请稍后重试')
-    }
-  }
-
-  const openInviteModePicker = () => {
-    if (!canManageTeam) {
-      return
-    }
-
-    Alert.alert('邀请他人权限', undefined, [
-      {
-        text: '群主/管理员',
-        onPress: () =>
-          updateTeamMeta({
-            inviteMode: V2NIMTeamInviteMode.V2NIM_TEAM_INVITE_MODE_MANAGER
-          }).catch(() => undefined)
-      },
-      {
-        text: '所有人',
-        onPress: () =>
-          updateTeamMeta({
-            inviteMode: V2NIMTeamInviteMode.V2NIM_TEAM_INVITE_MODE_ALL
-          }).catch(() => undefined)
-      },
-      { text: '取消', style: 'cancel' }
-    ])
-  }
-
-  const openUpdateInfoModePicker = () => {
-    if (!canManageTeam) {
-      return
-    }
-
-    Alert.alert('群资料修改权限', undefined, [
-      {
-        text: '群主/管理员',
-        onPress: () =>
-          updateTeamMeta({
-            updateInfoMode: V2NIMTeamUpdateInfoMode.V2NIM_TEAM_UPDATE_INFO_MODE_MANAGER
-          }).catch(() => undefined)
-      },
-      {
-        text: '所有人',
-        onPress: () =>
-          updateTeamMeta({
-            updateInfoMode: V2NIMTeamUpdateInfoMode.V2NIM_TEAM_UPDATE_INFO_MODE_ALL
-          }).catch(() => undefined)
-      },
-      { text: '取消', style: 'cancel' }
-    ])
-  }
-
-  const openAgreeModePicker = () => {
-    if (!canManageTeam) {
-      return
-    }
-
-    Alert.alert('是否需要被邀请者同意', undefined, [
-      {
-        text: '需要',
-        onPress: () =>
-          updateTeamMeta({
-            agreeMode: V2NIMTeamAgreeMode.V2NIM_TEAM_AGREE_MODE_AUTH
-          }).catch(() => undefined)
-      },
-      {
-        text: '不需要',
-        onPress: () =>
-          updateTeamMeta({
-            agreeMode: V2NIMTeamAgreeMode.V2NIM_TEAM_AGREE_MODE_NO_AUTH
-          }).catch(() => undefined)
-      },
-      { text: '取消', style: 'cancel' }
-    ])
   }
 
   const confirmDangerAction = () => {
-    Alert.alert(
-      isOwner ? '解散群聊' : '退出群聊',
-      isOwner ? '确认解散当前群聊？' : '确认退出当前群聊？',
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '确定',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              if (isOwner) {
-                await teamStore.dismissTeam(resolvedTeamId)
-              } else {
-                await teamStore.leaveTeam(resolvedTeamId)
-              }
+    Alert.alert(settingsCopy.dangerAction, settingsCopy.dangerConfirm, [
+      {
+        text: settingsCopy.dangerConfirmAction,
+        style: 'destructive',
+        onPress: async () => {
+          let completed = false
 
-              router.replace('/(tabs)/contacts' as never)
-            } catch (error) {
-              Alert.alert('操作失败', error instanceof Error ? error.message : '请稍后重试')
+          try {
+            await ensureNetworkAvailable()
+            conversationStore.markTeamExitInProgress(resolvedConversationId)
+
+            if (isDiscussion) {
+              await teamStore.leaveDiscussionTeam(resolvedTeamId)
+            } else if (isOwner) {
+              await teamStore.dismissTeam(resolvedTeamId)
+            } else {
+              await teamStore.leaveTeam(resolvedTeamId)
+            }
+
+            await deleteTeamConversationData(resolvedConversationId)
+
+            completed = true
+            returnAfterTeamExit(navigation, resolvedConversationId)
+          } catch (error) {
+            conversationStore.clearTeamExitInProgress(resolvedConversationId)
+            const offlineMessage = await getConfirmedOfflineMessage()
+            toast.alert(
+              t('commonActionFailed'),
+              offlineMessage || getDisplayErrorMessage(error, t('commonRetryLater'))
+            )
+          } finally {
+            if (completed) {
+              setTimeout(() => {
+                conversationStore.clearTeamExitInProgress(resolvedConversationId)
+              }, 3000)
             }
           }
         }
-      ]
-    )
+      },
+      { text: t('actionCancel'), style: 'cancel' }
+    ])
   }
 
   if (loading && !team && members.length === 0) {
     return (
       <UIKitPage style={styles.centerState}>
-        <Stack.Screen options={{ title: '设置', headerTitleAlign: 'center' }} />
+        <Stack.Screen options={{ title: t('teamSettingsTitle'), headerTitleAlign: 'center' }} />
         <ActivityIndicator color="#337EFF" />
       </UIKitPage>
     )
@@ -227,63 +369,69 @@ const TeamSettingsScreen = observer(() => {
   if (loadFailed && !team && members.length === 0) {
     return (
       <UIKitPage style={styles.centerState}>
-        <Stack.Screen options={{ title: '设置', headerTitleAlign: 'center' }} />
-        <ThemedText>群设置加载失败</ThemedText>
+        <Stack.Screen options={{ title: t('teamSettingsTitle'), headerTitleAlign: 'center' }} />
+        <ThemedText>{t('teamSettingsLoadFailed')}</ThemedText>
         <Pressable
           style={styles.retryButton}
           onPress={() => loadTeamDetails().catch(() => undefined)}
         >
-          <ThemedText style={styles.retryText}>重试</ThemedText>
+          <ThemedText style={styles.retryText}>{t('commonRetry')}</ThemedText>
         </Pressable>
       </UIKitPage>
     )
   }
 
-  const conversation = conversationStore.getConversation(resolvedConversationId)
+  const conversation = getConversationForSettings(resolvedConversationId)
   const previewMembers = members.slice(0, 7)
-  const memberCount = team?.memberCount || members.length
   const myMember = members.find((item) => item.accountId === userStore.selfProfile?.accountId)
 
   return (
     <UIKitPage style={styles.page}>
-      <Stack.Screen options={{ title: '设置', headerTitleAlign: 'center' }} />
+      <Stack.Screen options={{ title: t('teamSettingsTitle'), headerTitleAlign: 'center' }} />
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.card}>
-          <View style={styles.heroRow}>
+          <Pressable
+            style={styles.heroRow}
+            onPress={() =>
+              runWithNavigationLock(() => {
+                router.push({
+                  pathname: '/team/info',
+                  params: { teamId: resolvedTeamId }
+                } as never)
+              })
+            }
+          >
             <UIKitUserAvatar
-              account={resolvedTeamId || team?.name || '群聊'}
+              account={resolvedTeamId || team?.name || t('commonGroupChat')}
               avatar={team?.avatar}
-              size={64}
+              size={56}
             />
             <View style={styles.heroMeta}>
-              <ThemedText style={styles.heroTitle}>{team?.name || '未命名群聊'}</ThemedText>
-              <ThemedText style={styles.heroSubtitle}>群号：{resolvedTeamId || '-'}</ThemedText>
+              <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.heroTitle}>
+                {team?.name || t('commonUnnamedGroupChat')}
+              </ThemedText>
+              <View style={styles.heroSubtitleRow}>
+                <ThemedText style={styles.heroTypeBadge}>{settingsCopy.typeLabel}</ThemedText>
+                <ThemedText style={styles.heroSubtitle}>
+                  {t('teamSettingsGroupId', { teamId: resolvedTeamId || '-' })}
+                </ThemedText>
+              </View>
             </View>
-            {canManageTeam ? (
-              <Pressable
-                style={styles.roundAddButton}
-                onPress={() =>
-                  router.push({
-                    pathname: '/team/member-picker',
-                    params: { teamId: resolvedTeamId }
-                  } as never)
-                }
-              >
-                <UIKitIcon type="icon-tianjiahaoyou" size={22} tintColor="#B7C0CC" />
-              </Pressable>
-            ) : null}
-          </View>
+            <UIKitIcon type="icon-jiantou" size={18} tintColor="#A2AAB5" />
+          </Pressable>
           <UIKitRowDivider />
           <UIKitInfoRow
-            label="群成员"
+            label={settingsCopy.memberLabel}
             value={String(memberCount)}
             showChevron
             onPress={() =>
-              router.push({
-                pathname: '/team/members',
-                params: { teamId: resolvedTeamId }
-              } as never)
+              runWithNavigationLock(() => {
+                router.push({
+                  pathname: '/team/members',
+                  params: { teamId: resolvedTeamId }
+                } as never)
+              })
             }
           />
           <ScrollView
@@ -295,44 +443,41 @@ const TeamSettingsScreen = observer(() => {
               <Pressable
                 style={styles.memberAddItem}
                 onPress={() =>
-                  router.push({
-                    pathname: '/team/member-picker',
-                    params: { teamId: resolvedTeamId }
-                  } as never)
+                  runWithNavigationLock(() => {
+                    router.push({
+                      pathname: '/team/member-picker',
+                      params: { teamId: resolvedTeamId }
+                    } as never)
+                  })
                 }
               >
                 <View style={styles.memberAddCircle}>
-                  <UIKitIcon type="icon-tianjiahaoyou" size={22} tintColor="#BCC5D1" />
+                  <ThemedText style={styles.memberAddText}>+</ThemedText>
                 </View>
+                <View style={styles.memberAddNameSpacer} />
               </Pressable>
             ) : null}
             {previewMembers.map((member) => {
               const friend = friendStore.friends.get(member.accountId)
-              const name =
-                getUIKitAppellation({
-                  account: member.accountId,
-                  teamId: resolvedTeamId
-                }) || member.accountId
 
               return (
                 <Pressable
                   key={member.accountId}
                   style={styles.memberItem}
                   onPress={() =>
-                    router.push({
-                      pathname: '/friend/friend-card',
-                      params: { accountId: member.accountId }
-                    } as never)
+                    runWithNavigationLock(() => {
+                      router.push({
+                        pathname: '/friend/friend-card',
+                        params: { accountId: member.accountId }
+                      } as never)
+                    })
                   }
                 >
                   <UIKitUserAvatar
                     account={member.accountId}
                     avatar={friend?.userProfile?.avatar}
-                    size={56}
+                    size={38}
                   />
-                  <ThemedText numberOfLines={1} style={styles.memberName}>
-                    {name}
-                  </ThemedText>
                 </Pressable>
               )
             })}
@@ -341,160 +486,90 @@ const TeamSettingsScreen = observer(() => {
 
         <View style={styles.card}>
           <UIKitInfoRow
-            label="群名称"
-            value={team?.name || '未设置'}
-            showChevron={canManageTeam}
-            onPress={
-              canManageTeam
-                ? () =>
-                    router.push({
-                      pathname: '/team/edit',
-                      params: { teamId: resolvedTeamId, field: 'name', title: '群名称' }
-                    } as never)
-                : undefined
-            }
-          />
-          <UIKitRowDivider />
-          <UIKitInfoRow
-            label="群介绍"
-            value={team?.intro || '未设置'}
-            showChevron={canManageTeam}
-            onPress={
-              canManageTeam
-                ? () =>
-                    router.push({
-                      pathname: '/team/edit',
-                      params: { teamId: resolvedTeamId, field: 'intro', title: '群介绍' }
-                    } as never)
-                : undefined
-            }
-          />
-          <UIKitRowDivider />
-          <UIKitInfoRow
-            label="我的群昵称"
-            value={myMember?.teamNick || '未设置'}
-            showChevron
-            onPress={() =>
-              router.push({
-                pathname: '/team/edit',
-                params: { teamId: resolvedTeamId, field: 'teamNick', title: '我在群里的昵称' }
-              } as never)
-            }
-          />
-          <UIKitRowDivider />
-          <UIKitInfoRow
-            label="群头像"
-            value=""
-            showChevron={canManageTeam}
-            right={
-              <UIKitUserAvatar
-                account={resolvedTeamId || team?.name || '群聊'}
-                avatar={team?.avatar}
-                size={38}
-              />
-            }
-            onPress={
-              canManageTeam
-                ? () =>
-                    router.push({
-                      pathname: '/team/edit',
-                      params: { teamId: resolvedTeamId, field: 'avatar', title: '修改头像' }
-                    } as never)
-                : undefined
-            }
-          />
-        </View>
-
-        <View style={styles.card}>
-          <UIKitInfoRow
-            label="标记"
+            label={t('commonMessageMark')}
             value=""
             showChevron
             onPress={() =>
-              router.push({
-                pathname: '/chat/pins',
-                params: { conversationId: resolvedConversationId }
-              } as never)
-            }
-          />
-          <UIKitRowDivider />
-          <UIKitInfoRow
-            label="历史记录"
-            value=""
-            showChevron
-            onPress={() =>
-              router.push({
-                pathname: '/chat/history',
-                params: {
-                  conversationId: resolvedConversationId,
-                  title: team?.name || resolvedTeamId
-                }
-              } as never)
+              runWithNavigationLock(() => {
+                router.push({
+                  pathname: '/chat/pins',
+                  params: { conversationId: resolvedConversationId }
+                } as never)
+              })
             }
           />
           <UIKitRowDivider />
           <UIKitSwitchRow
-            label="开启消息提醒"
+            label={t('commonEnableMessageNotification')}
             value={!conversation?.mute}
             onValueChange={handleToggleMute}
           />
           <UIKitRowDivider />
           <UIKitSwitchRow
-            label="聊天置顶"
+            label={t('commonChatStickTop')}
             value={!!conversation?.stickTop}
             onValueChange={handleToggleStickTop}
           />
+          {!isDiscussion ? (
+            <>
+              <UIKitRowDivider />
+              <UIKitInfoRow
+                label={t('teamSettingsMyNick')}
+                value={myMember?.teamNick || t('commonNotSet')}
+                showChevron
+                onPress={() =>
+                  runWithNavigationLock(() => {
+                    router.push({
+                      pathname: '/team/edit',
+                      params: {
+                        teamId: resolvedTeamId,
+                        field: 'teamNick',
+                        title: t('teamSettingsMyNickEditTitle')
+                      }
+                    } as never)
+                  })
+                }
+              />
+            </>
+          ) : null}
         </View>
 
-        <View style={styles.card}>
-          {canManageTeam ? (
-            <UIKitSwitchRow
-              label="群禁言"
-              value={
-                team?.chatBannedMode ===
-                V2NIMTeamChatBannedMode.V2NIM_TEAM_CHAT_BANNED_MODE_BANNED_NORMAL
-              }
-              onValueChange={handleToggleChatBanned}
-            />
-          ) : (
-            <UIKitInfoRow
-              label="群禁言"
-              value={
-                team?.chatBannedMode ===
-                V2NIMTeamChatBannedMode.V2NIM_TEAM_CHAT_BANNED_MODE_BANNED_NORMAL
-                  ? '已开启'
-                  : '已关闭'
-              }
-            />
-          )}
-        </View>
-
-        <View style={styles.card}>
-          <UIKitInfoRow
-            label="邀请他人权限"
-            value={getInviteModeLabel(team?.inviteMode)}
-            showChevron={canManageTeam}
-            onPress={canManageTeam ? openInviteModePicker : undefined}
-          />
-          <UIKitRowDivider />
-          <UIKitInfoRow
-            label="群资料修改权限"
-            value={getUpdateInfoModeLabel(team?.updateInfoMode)}
-            showChevron={canManageTeam}
-            onPress={canManageTeam ? openUpdateInfoModePicker : undefined}
-          />
-          <UIKitRowDivider />
-          <UIKitInfoRow
-            label="是否需要被邀请者同意"
-            value={getAgreeModeLabel(team?.agreeMode)}
-            showChevron={canManageTeam}
-            onPress={canManageTeam ? openAgreeModePicker : undefined}
-          />
-        </View>
+        {!isDiscussion && (canManageTeam || isOwner) ? (
+          <View style={styles.card}>
+            {isOwner ? (
+              <>
+                <UIKitSwitchRow
+                  label={t('teamSettingsChatBanned')}
+                  value={
+                    team?.chatBannedMode ===
+                    V2NIMTeamChatBannedMode.V2NIM_TEAM_CHAT_BANNED_MODE_BANNED_NORMAL
+                  }
+                  onValueChange={handleToggleChatBanned}
+                />
+                {canManageTeam ? <UIKitRowDivider /> : null}
+              </>
+            ) : null}
+            {canManageTeam ? (
+              <UIKitInfoRow
+                label={t('teamSettingsManage')}
+                value=""
+                showChevron
+                onPress={() =>
+                  runWithNavigationLock(() => {
+                    router.push({
+                      pathname: '/team/manage',
+                      params: { teamId: resolvedTeamId }
+                    } as never)
+                  })
+                }
+              />
+            ) : null}
+          </View>
+        ) : null}
 
         <View style={styles.card}>
           <UIKitActionCell
-            label={isOwner ? '解散群聊' : '退出群聊'}
+            label={settingsCopy.dangerAction}
             tone="danger"
             onPress={confirmDangerAction}
           />
@@ -537,68 +612,77 @@ const styles = StyleSheet.create({
     overflow: 'hidden'
   },
   heroRow: {
-    paddingHorizontal: 18,
-    paddingTop: 20,
-    paddingBottom: 18,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16
+    gap: 12
   },
   heroMeta: {
-    flex: 1
+    flex: 1,
+    minWidth: 0
   },
   heroTitle: {
     color: '#333333',
-    fontSize: 18,
-    lineHeight: 26,
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: '600'
   },
   heroSubtitle: {
-    marginTop: 8,
     color: '#98A1AD',
-    fontSize: 15,
-    lineHeight: 22
+    fontSize: 13,
+    lineHeight: 18
   },
-  roundAddButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    borderWidth: 2,
-    borderColor: '#D0D8E4',
-    borderStyle: 'dashed',
+  heroSubtitleRow: {
+    marginTop: 6,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center'
+    gap: 6,
+    flexWrap: 'wrap'
+  },
+  heroTypeBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: '#F2F5FA',
+    color: '#69707D',
+    fontSize: 12,
+    lineHeight: 16
   },
   memberStrip: {
     paddingHorizontal: 18,
     paddingTop: 4,
-    paddingBottom: 18,
-    gap: 12
+    paddingBottom: 16,
+    gap: 8
   },
   memberAddItem: {
+    width: 44,
     alignItems: 'center'
   },
   memberAddCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    borderWidth: 2,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
     borderColor: '#D0D8E4',
     borderStyle: 'dashed',
     alignItems: 'center',
     justifyContent: 'center'
   },
-  memberItem: {
-    width: 64,
-    alignItems: 'center',
-    gap: 8
+  memberAddText: {
+    color: '#98A1AD',
+    fontSize: 20,
+    lineHeight: 22,
+    fontWeight: '400'
   },
-  memberName: {
+  memberAddNameSpacer: {
     width: '100%',
-    color: '#7E8794',
-    fontSize: 12,
-    lineHeight: 18,
-    textAlign: 'center'
+    height: 0
+  },
+  memberItem: {
+    width: 44,
+    alignItems: 'center'
   }
 })
 

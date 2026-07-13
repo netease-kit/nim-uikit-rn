@@ -2,27 +2,30 @@
   "expo": {
     "name": "im2-rn-demo",
     "slug": "im2-rn-demo",
-    "version": "10.0.0-beta",
+    "version": "10.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "im2rndemo",
+    "scheme": "neteaseyunxinimdemo",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.netease.yunxin.app.im.zhiyun",
+      "infoPlist": {
+        "PHPhotoLibraryPreventAutomaticLimitedAccessAlert": true,
+        "NSLocalNetworkUsageDescription": "允许访问本地网络以连接本机 Metro 调试服务",
+        "LSApplicationQueriesSchemes": ["iosamap", "qqmap"],
+        "UIBackgroundModes": ["remote-notification"]
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
-      "permissions": [
-        "android.permission.RECORD_AUDIO",
-        "android.permission.RECORD_AUDIO"
-      ],
-      "package": "com.anonymous.im2rndemo"
+      "permissions": ["android.permission.RECORD_AUDIO", "android.permission.POST_NOTIFICATIONS"],
+      "package": "com.netease.yunxin.app.im"
     },
     "web": {
       "bundler": "metro",
@@ -34,8 +37,8 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-figma.png",
-          "imageWidth": 320,
+          "image": "./assets/images/splash-logo-composite.png",
+          "imageWidth": 160,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
@@ -49,12 +52,40 @@
         }
       ],
       [
+        "expo-media-library",
+        {
+          "photosPermission": "允许访问相册以保存图片和视频消息",
+          "savePhotosPermission": "允许保存图片和视频消息到系统相册"
+        }
+      ],
+      [
         "expo-notifications",
         {
           "icon": "./assets/images/icon.png",
           "color": "#c1292e"
         }
-      ]
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "允许访问麦克风以录制聊天语音消息",
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "允许访问当前位置以发送聊天位置消息",
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": false
+        }
+      ],
+      "expo-image",
+      "expo-sharing",
+      "expo-video",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

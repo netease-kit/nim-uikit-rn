@@ -76,10 +76,16 @@ const MessageReadInfo: React.FC = () => {
       </div>
 
       <div className="msg-read-header">
-        <div className={`msg-read-header-item ${selectedType === 'read' ? 'active' : ''}`} onClick={() => setSelectedType('read')}>
+        <div
+          className={`msg-read-header-item ${selectedType === 'read' ? 'active' : ''}`}
+          onClick={() => setSelectedType('read')}
+        >
           {`${t('readText')}(${readCount})`}
         </div>
-        <div className={`msg-read-header-item ${selectedType === 'unread' ? 'active' : ''}`} onClick={() => setSelectedType('unread')}>
+        <div
+          className={`msg-read-header-item ${selectedType === 'unread' ? 'active' : ''}`}
+          onClick={() => setSelectedType('unread')}
+        >
           {`${t('unreadText')}(${unReadCount})`}
         </div>
       </div>
@@ -101,7 +107,10 @@ const MessageReadInfo: React.FC = () => {
       </div>
 
       {/* 未读列表 */}
-      <div className="list-wrapper" style={{ display: selectedType === 'unread' ? 'block' : 'none' }}>
+      <div
+        className="list-wrapper"
+        style={{ display: selectedType === 'unread' ? 'block' : 'none' }}
+      >
         {unReadList.length > 0 ? (
           unReadList.map((item) => (
             <div className="list-item" key={item}>

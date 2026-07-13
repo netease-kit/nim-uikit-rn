@@ -73,138 +73,150 @@ export interface InputRef {
   /**
    * 原生 input 元素
    */
-  el: React.RefObject<HTMLInputElement>;
+  el: React.RefObject<HTMLInputElement>
   /**
    * 设置选择范围
    */
-  setSelectionRange: (start: number, end: number) => void;
+  setSelectionRange: (start: number, end: number) => void
   /**
    * 聚焦
    */
-  focus: () => void;
+  focus: () => void
 }
 
 /**
  * 基础输入框组件
  */
-const Input = forwardRef<InputRef, InputProps>(({
-  value,
-  defaultValue = '',
-  type = 'text',
-  placeholder = '请输入',
-  disabled = false,
-  maxLength,
-  showClear = false,
-  inputStyle = {},
-  id = '',
-  className = '',
-  onChange,
-  onFocus,
-  onBlur,
-  onClear,
-  onConfirm,
-  onKeyDown
-}, ref) => {
-  const el = useRef<HTMLInputElement>(null)
-  // 当前实际值
-  const currentValue = typeof value !== 'undefined' ? value : typeof defaultValue !== 'undefined' ? defaultValue : ''
-
-  // 是否正在使用中文输入. 防止 input 受控组件无法输入中文, 参见 https://www.tangshuang.net/7840.html
-  let inputing = false
-
-  // 暴露给父组件的方法
-  useImperativeHandle(ref, () => ({
-    el,
-    setSelectionRange: (start: number, end: number) => {
-      if (el.current) {
-        el.current.focus();
-        el.current.setSelectionRange(start, end);
-      }
+const Input = forwardRef<InputRef, InputProps>(
+  (
+    {
+      value,
+      defaultValue = '',
+      type = 'text',
+      placeholder = '请输入',
+      disabled = false,
+      maxLength,
+      showClear = false,
+      inputStyle = {},
+      id = '',
+      className = '',
+      onChange,
+      onFocus,
+      onBlur,
+      onClear,
+      onConfirm,
+      onKeyDown
     },
-    focus: () => {
-      el.current?.focus();
-    }
-  }), []);
+    ref
+  ) => {
+    const el = useRef<HTMLInputElement>(null)
+    // 当前实际值
+    const currentValue =
+      typeof value !== 'undefined' ? value : typeof defaultValue !== 'undefined' ? defaultValue : ''
 
-  // 处理输入事件
-  const handleChange = (event: React.ChangeEvent<HTMLInputElement> | React.CompositionEvent<HTMLInputElement>) => {
-    const newValue = (event.target as HTMLInputElement).value
-    onChange?.(newValue)
-  }
+    // 是否正在使用中文输入. 防止 input 受控组件无法输入中文, 参见 https://www.tangshuang.net/7840.html
+    let inputing = false
 
-  // 清空输入
-  const clearInput = () => {
-    onChange?.('')
-    onClear?.()
-  }
-
-  const forceSetValue = () => {
-    if (typeof value !== 'undefined' && el.current) {
-      const input = el.current
-      input.value = value.toString()
-      input.setAttribute('value', value.toString())
-    }
-  }
-
-  // 处理按键事件
-  const handleKeyPress = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    // 检测是否按下回车键
-    if (event.key === 'Enter') {
-      event.preventDefault() // 阻止默认的换行行为
-      onConfirm?.(currentValue) // 触发发送事件
-    }
-    onKeyDown?.(event)
-  }
-
-  return (
-    <div className={classNames('nim-input-wrapper', { 'is-disabled': disabled }, className)}>
-      <input
-        id={id}
-        type={type}
-        defaultValue={currentValue}
-        ref={(input) => {
-          if (!input) return
-          // @ts-ignore
-          el.current = input // 实际可变的, 但是 ts 不允许, 说是只读属性.
-          forceSetValue()
-        }}
-        placeholder={placeholder}
-        disabled={disabled}
-        maxLength={maxLength}
-        style={inputStyle}
-        className="nim-input"
-        onFocus={(evt) => {
-          onFocus?.(evt)
-        }}
-        onBlur={(evt) => {
-          // react 又干了些多余的事，在每次 focus 和 blur 时，都会去检查组件受控情况和 value 值，
-          // 导致非受控组件的内部状态每次都是初始值（当第一次进来 defaultValue 为空时，那么这个 input 就一直都是空）。
-          // 所以加了 onFocus 和 onBlur 两个属性，在里面通过一个延时操作，在 react 完成自己的检查之后，我再去修改真实 DOM，解决这个问题。
-          // setTimeout(forceSetValue, 150)
-          onBlur?.(evt)
-        }}
-        onCompositionStart={() => {
-          inputing = true
-        }}
-        onCompositionEnd={(evt) => {
-          inputing = false
-          handleChange(evt)
-        }}
-        onChange={(evt) => {
-          // 如果当前正在使用中文输入, 则不用处理这个 onChange 事件.
-          if (!inputing) {
-            handleChange(evt)
+    // 暴露给父组件的方法
+    useImperativeHandle(
+      ref,
+      () => ({
+        el,
+        setSelectionRange: (start: number, end: number) => {
+          if (el.current) {
+            el.current.focus()
+            el.current.setSelectionRange(start, end)
           }
-        }}
-        onKeyDown={handleKeyPress}
-      />
-      {showClear && currentValue && (
-        <span className="nim-clear-icon" onClick={clearInput}>
-          ×
-        </span>
-      )}
-    </div>
-  )
-})
+        },
+        focus: () => {
+          el.current?.focus()
+        }
+      }),
+      []
+    )
+
+    // 处理输入事件
+    const handleChange = (
+      event: React.ChangeEvent<HTMLInputElement> | React.CompositionEvent<HTMLInputElement>
+    ) => {
+      const newValue = (event.target as HTMLInputElement).value
+      onChange?.(newValue)
+    }
+
+    // 清空输入
+    const clearInput = () => {
+      onChange?.('')
+      onClear?.()
+    }
+
+    const forceSetValue = () => {
+      if (typeof value !== 'undefined' && el.current) {
+        const input = el.current
+        input.value = value.toString()
+        input.setAttribute('value', value.toString())
+      }
+    }
+
+    // 处理按键事件
+    const handleKeyPress = (event: React.KeyboardEvent<HTMLInputElement>) => {
+      // 检测是否按下回车键
+      if (event.key === 'Enter') {
+        event.preventDefault() // 阻止默认的换行行为
+        onConfirm?.(currentValue) // 触发发送事件
+      }
+      onKeyDown?.(event)
+    }
+
+    return (
+      <div className={classNames('nim-input-wrapper', { 'is-disabled': disabled }, className)}>
+        <input
+          id={id}
+          type={type}
+          defaultValue={currentValue}
+          ref={(input) => {
+            if (!input) return
+            // @ts-ignore
+            el.current = input // 实际可变的, 但是 ts 不允许, 说是只读属性.
+            forceSetValue()
+          }}
+          placeholder={placeholder}
+          disabled={disabled}
+          maxLength={maxLength}
+          style={inputStyle}
+          className="nim-input"
+          onFocus={(evt) => {
+            onFocus?.(evt)
+          }}
+          onBlur={(evt) => {
+            // react 又干了些多余的事，在每次 focus 和 blur 时，都会去检查组件受控情况和 value 值，
+            // 导致非受控组件的内部状态每次都是初始值（当第一次进来 defaultValue 为空时，那么这个 input 就一直都是空）。
+            // 所以加了 onFocus 和 onBlur 两个属性，在里面通过一个延时操作，在 react 完成自己的检查之后，我再去修改真实 DOM，解决这个问题。
+            // setTimeout(forceSetValue, 150)
+            onBlur?.(evt)
+          }}
+          onCompositionStart={() => {
+            inputing = true
+          }}
+          onCompositionEnd={(evt) => {
+            inputing = false
+            handleChange(evt)
+          }}
+          onChange={(evt) => {
+            // 如果当前正在使用中文输入, 则不用处理这个 onChange 事件.
+            if (!inputing) {
+              handleChange(evt)
+            }
+          }}
+          onKeyDown={handleKeyPress}
+        />
+        {showClear && currentValue && (
+          <span className="nim-clear-icon" onClick={clearInput}>
+            ×
+          </span>
+        )}
+      </div>
+    )
+  }
+)
 
 export default Input

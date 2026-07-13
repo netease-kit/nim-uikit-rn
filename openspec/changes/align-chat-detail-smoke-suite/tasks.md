@@ -1,0 +1,5 @@
+- [x] 1. Confirm testcase `0460-断网聊天页面显示` currently fails because the root auth guard redirects away from chat detail during offline/disconnected states.
+- [x] 2. Update the root routing/auth gating so an authenticated session can stay on chat detail while offline.
+- [x] 3. Render the chat-detail offline banner using real network availability and testcase-aligned copy.
+- [x] 4. Re-verify testcase `0460-断网聊天页面显示` only, and do not advance until it passes.
+- [x] 5. Record the failure cause, fix, validation commands, and result in `TestCases/10.0.0/聊天详情页/执行记录.md`.

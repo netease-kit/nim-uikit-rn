@@ -16,5 +16,10 @@
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
   // 自动设定eslint工作区
-  "eslint.workingDirectories": [{ "mode": "auto" }]
+  "eslint.workingDirectories": [
+    {
+      "mode": "auto"
+    }
+  ],
+  "java.configuration.updateBuildConfiguration": "interactive"
 }

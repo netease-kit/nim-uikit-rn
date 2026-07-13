@@ -1,21 +1,24 @@
 import { Stack } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React from 'react'
-import { Alert, Pressable, StyleSheet, View } from 'react-native'
+import { Pressable, StyleSheet, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import { preferenceStore } from '@/stores'
 
-const options = [
-  { value: 'basic', label: '基础皮肤', description: '默认的基础样式' },
-  { value: 'common', label: '通用皮肤', description: '切换到通用风格展示' }
-] as const
-
 const AppearanceScreen = observer(() => {
+  const { t } = useAppTranslation()
+  const options = [
+    { value: 'basic', label: t('appearanceBasic'), description: t('appearanceBasicDesc') },
+    { value: 'common', label: t('appearanceCommon'), description: t('appearanceCommonDesc') }
+  ] as const
+
   return (
     <ThemedView style={styles.container}>
-      <Stack.Screen options={{ title: '选择外观', headerTitleAlign: 'center' }} />
+      <Stack.Screen options={{ title: t('appearanceTitle'), headerTitleAlign: 'center' }} />
 
       {options.map((option) => {
         const isSelected = preferenceStore.preferences.appearance === option.value
@@ -28,7 +31,10 @@ const AppearanceScreen = observer(() => {
               try {
                 await preferenceStore.updatePreference('appearance', option.value)
               } catch (error) {
-                Alert.alert('切换失败', error instanceof Error ? error.message : '请稍后重试')
+                toast.alert(
+                  t('appearanceSwitchFailed'),
+                  error instanceof Error ? error.message : t('commonRetryLater')
+                )
               }
             }}
           >

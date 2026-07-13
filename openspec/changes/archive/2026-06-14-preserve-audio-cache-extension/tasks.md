@@ -1,0 +1,3 @@
+- [x] Add OpenSpec coverage for preserving voice attachment extensions in the playback cache.
+- [x] Update RN voice playback cache filename resolution to prefer attachment metadata extension.
+- [x] Validate TypeScript, targeted formatting, and OpenSpec change.

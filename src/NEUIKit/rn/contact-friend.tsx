@@ -5,6 +5,7 @@ import {
   StyleSheet,
   Switch,
   TextInputProps,
+  TextStyle,
   TouchableOpacity,
   View,
   ViewStyle
@@ -75,12 +76,14 @@ export function UIKitOutlineButton({
   onPress,
   tintColor = NEUIKitColors.primary,
   style,
+  textStyle,
   disabled
 }: {
   label: string
   onPress: () => void
   tintColor?: string
   style?: StyleProp<ViewStyle>
+  textStyle?: StyleProp<TextStyle>
   disabled?: boolean
 }) {
   return (
@@ -94,7 +97,9 @@ export function UIKitOutlineButton({
       onPress={onPress}
       disabled={disabled}
     >
-      <ThemedText style={[styles.outlineButtonText, { color: disabled ? '#B5BCC7' : tintColor }]}>
+      <ThemedText
+        style={[styles.outlineButtonText, { color: disabled ? '#B5BCC7' : tintColor }, textStyle]}
+      >
         {label}
       </ThemedText>
     </TouchableOpacity>
@@ -114,11 +119,13 @@ export function UIKitProfileHero({
 }) {
   return (
     <View style={styles.profileHero}>
-      <UIKitUserAvatar account={account} avatar={avatar} size={90} />
+      <UIKitUserAvatar account={account} avatar={avatar} size={60} />
       <View style={styles.profileTextWrap}>
-        <ThemedText style={styles.profileTitle}>{title}</ThemedText>
+        <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.profileTitle}>
+          {title}
+        </ThemedText>
         {lines.filter(Boolean).map((line) => (
-          <ThemedText key={line} style={styles.profileLine}>
+          <ThemedText key={line} numberOfLines={1} ellipsizeMode="tail" style={styles.profileLine}>
             {line}
           </ThemedText>
         ))}
@@ -133,7 +140,9 @@ export function UIKitInfoRow({
   onPress,
   showChevron = false,
   right,
-  style
+  style,
+  valueNumberOfLines = 2,
+  compact = false
 }: {
   label: string
   value?: string
@@ -141,15 +150,17 @@ export function UIKitInfoRow({
   showChevron?: boolean
   right?: React.ReactNode
   style?: StyleProp<ViewStyle>
+  valueNumberOfLines?: number
+  compact?: boolean
 }) {
   const content = (
-    <View style={[styles.infoRow, style]}>
+    <View style={[styles.infoRow, compact && styles.infoRowCompact, style]}>
       <ThemedText style={styles.infoLabel}>{label}</ThemedText>
-      <View style={styles.infoRight}>
+      <View style={[styles.infoRight, compact && styles.infoRightCompact]}>
         {right ? (
           right
         ) : value ? (
-          <ThemedText numberOfLines={2} style={styles.infoValue}>
+          <ThemedText numberOfLines={valueNumberOfLines} style={styles.infoValue}>
             {value}
           </ThemedText>
         ) : null}
@@ -177,13 +188,15 @@ export function UIKitSwitchRow({
   return (
     <View style={styles.infoRow}>
       <ThemedText style={styles.infoLabel}>{label}</ThemedText>
-      <Switch
-        value={value}
-        onValueChange={onValueChange}
-        trackColor={{ false: '#DDE3EC', true: '#337EFF' }}
-        thumbColor="#FFFFFF"
-        ios_backgroundColor="#DDE3EC"
-      />
+      <View style={styles.switchControl}>
+        <Switch
+          value={value}
+          onValueChange={onValueChange}
+          trackColor={{ false: '#DDE3EC', true: '#337EFF' }}
+          thumbColor="#FFFFFF"
+          ios_backgroundColor="#DDE3EC"
+        />
+      </View>
     </View>
   )
 }
@@ -276,25 +289,26 @@ const styles = StyleSheet.create({
   profileHero: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
-    paddingHorizontal: 20,
-    paddingVertical: 20,
+    gap: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
     backgroundColor: '#FFFFFF'
   },
   profileTextWrap: {
     flex: 1,
-    gap: 4
+    minWidth: 0,
+    gap: 2
   },
   profileTitle: {
     color: '#333333',
-    fontSize: 32,
-    lineHeight: 38,
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: '700'
   },
   profileLine: {
     color: '#7B8594',
-    fontSize: 17,
-    lineHeight: 24
+    fontSize: 14,
+    lineHeight: 20
   },
   infoRow: {
     minHeight: 68,
@@ -303,6 +317,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     backgroundColor: '#FFFFFF'
+  },
+  infoRowCompact: {
+    minHeight: 56,
+    paddingHorizontal: 20
   },
   infoLabel: {
     flexShrink: 0,
@@ -316,9 +334,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: 10,
-    marginLeft: 20
+    marginLeft: 20,
+    minWidth: 0
+  },
+  infoRightCompact: {
+    gap: 8,
+    marginLeft: 16
+  },
+  switchControl: {
+    minHeight: 32,
+    justifyContent: 'center',
+    alignItems: 'center'
   },
   infoValue: {
+    flexShrink: 1,
     color: '#A6AFBB',
     fontSize: 17,
     lineHeight: 24,

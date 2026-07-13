@@ -1,22 +1,68 @@
 const appKey = ''
+const missingAppKeyMessage = '请先在 constants/NIMConfig.ts 中配置你自己的 AppKey'
 
-export const NIM_APP_KEY_REQUIRED_MESSAGE =
-  '示例项目未内置 AppKey，请先在 constants/NIMConfig.ts 中配置你自己的云信 AppKey'
+const webTestEnvironment = {
+  V2NIMLoginServiceConfig: {
+    lbsUrls: ['https://lbs.netease.im/lbs/webconf.jsp'],
+    linkUrl: 'weblink.netease.im'
+  }
+} as const
 
-export const hasConfiguredNIMAppKey = () => appKey.trim().length > 0
+const nativeTestEnvironment = {
+  V2NIMLoginServiceConfig: {
+    lbsUrls: ['https://lbs.netease.im/lbs/webconf.jsp'],
+    linkUrl: 'weblink.netease.im'
+  }
+} as const
+
+export type NIMDebugLevel = 'debug' | 'log' | 'warn' | 'error' | 'off'
 
 export const NIMConfig = {
   appkey: appKey,
-  debugLevel: 'debug' as const,
+  debugLevel: 'warn' as NIMDebugLevel,
   apiVersion: 'v2' as const,
-  enableV2CloudConversation: true,
+  enableV2CloudConversation: false,
   binaryWebsocket: false,
+  offlinePush: {
+    apnsCertificateName: '',
+    fcmCertificateName: '',
+    hwPush: {
+      appId: '',
+      certificateName: ''
+    },
+    miPush: {
+      appId: '',
+      appKey: '',
+      certificateName: ''
+    },
+    vivoPush: {
+      appId: '',
+      appKey: '',
+      certificateName: ''
+    },
+    oppoPush: {
+      appId: '',
+      appKey: '',
+      secret: '',
+      certificateName: ''
+    },
+    honorPush: {
+      appId: '',
+      appKey: '',
+      certificateName: ''
+    },
+    mzPush: {
+      appId: '',
+      appKey: '',
+      certificateName: ''
+    }
+  },
   defaultLogin: {
     mobile: '',
     smsCode: ''
   },
   userCenter: {
-    appKey: appKey,
+    appKey,
     baseUrl: 'https://yiyong-user-center.netease.im',
     parentScope: 2,
     scope: 7,
@@ -26,14 +72,23 @@ export const NIMConfig = {
   storageKeys: {
     authSession: 'im2.auth.session',
     preferences: 'im2.preferences',
-    forwardHistory: 'im2.forward.history'
+    forwardHistory: 'im2.forward.history',
+    friendApplicationClearTimestamp: 'im2.friend.application.clear.timestamp',
+    conversationClearedUnreadWatermarks: 'im2.conversation.cleared.unread.watermarks',
+    conversationHiddenIds: 'im2.conversation.hidden.ids'
   },
-  // 测试环境配置
-  testEnvironment: {
-    V2NIMLoginServiceConfig: {
-      lbsUrls: ['https://lbs.netease.im/lbs/webconf.jsp'],
-      linkUrl: 'weblink.netease.im'
-    }
+  testEnvironment: webTestEnvironment,
+  nativeTestEnvironment,
+  webTestEnvironment
+}
+
+export function getMissingAppKeyMessage() {
+  return missingAppKeyMessage
+}
+
+export function assertAppKeyConfigured() {
+  if (!NIMConfig.appkey.trim()) {
+    throw new Error(missingAppKeyMessage)
   }
 }
 

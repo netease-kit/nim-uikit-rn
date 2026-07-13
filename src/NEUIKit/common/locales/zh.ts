@@ -298,7 +298,8 @@ export default {
   collectionFromText: '来自',
   openUrlText: '已复制链接，请在浏览器打开链接',
   SwitchToEnglishText: '是否切换为英文',
-  securityTipText: '仅用于体验云信产品功能，请勿轻信汇款、中奖等涉及钱款的信息，勿拨打陌生电话，谨防受骗。',
+  securityTipText:
+    '仅用于体验云信产品功能，请勿轻信汇款、中奖等涉及钱款的信息，勿拨打陌生电话，谨防受骗。',
   sendToFriend: '发送给好友',
   sendToTeam: '发送给群聊',
   // emoji 不能随便填，要用固定 key
@@ -328,6 +329,7 @@ export default {
   Halo: '[两眼冒星]',
   Shame: '[害羞]',
   Sleep: '[睡着]',
+  Sleeping: '[睡觉]',
   Tired: '[冒星]',
   Mask: '[口罩]',
   ok: '[OK]',
@@ -338,7 +340,8 @@ export default {
   ill: '[不舒服]',
   Mad: '[愤怒]',
   Ghost: '[鬼怪]',
-  Angry: '[发怒]',
+  Huff: '[发怒]',
+  Angry: '[生气]',
   Unhappy: '[不高兴]',
   Frown: '[皱眉]',
   Broken: '[心碎]',

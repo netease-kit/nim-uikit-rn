@@ -51,7 +51,9 @@ const Chat = observer(() => {
   const conversationId = store.uiStore.selectedConversation as string
 
   // 会话类型
-  const conversationType = nim.V2NIMConversationIdUtil.parseConversationType(conversationId) as unknown as V2NIMConst.V2NIMConversationType
+  const conversationType = nim.V2NIMConversationIdUtil.parseConversationType(
+    conversationId
+  ) as unknown as V2NIMConst.V2NIMConversationType
 
   // 对话方
   const to = nim.V2NIMConversationIdUtil.parseConversationTargetId(conversationId)
@@ -130,7 +132,12 @@ const Chat = observer(() => {
   const onReceiveMessages = (messages: any[]) => {
     // 当前在聊天页，视为消息已读，发送已读回执
     const pathname = window.location.pathname
-    if (messages.length && !messages[0]?.isSelf && messages[0].conversationId === conversationId && pathname === neUiKitRouterPath.chat) {
+    if (
+      messages.length &&
+      !messages[0]?.isSelf &&
+      messages[0].conversationId === conversationId &&
+      pathname === neUiKitRouterPath.chat
+    ) {
       handleMsgReceipt(messages)
     }
     // 加个宏任务, 因为事件先触发后, msgs 自身才更新
@@ -143,9 +150,17 @@ const Chat = observer(() => {
    * 处理收到消息的已读回执
    */
   const handleMsgReceipt = (message: any[]) => {
-    if (message[0].conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P && p2pMsgReceiptVisible) {
+    if (
+      message[0].conversationType ===
+        V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P &&
+      p2pMsgReceiptVisible
+    ) {
       store.msgStore.sendMsgReceiptActive(message[0])
-    } else if (message[0].conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM && teamManagerVisible) {
+    } else if (
+      message[0].conversationType ===
+        V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM &&
+      teamManagerVisible
+    ) {
       store.msgStore.sendTeamMsgReceiptActive(message)
     }
   }
@@ -155,7 +170,10 @@ const Chat = observer(() => {
    */
   const handleHistoryMsgReceipt = (messages: any[]) => {
     // 如果是单聊
-    if (conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P && p2pMsgReceiptVisible) {
+    if (
+      conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P &&
+      p2pMsgReceiptVisible
+    ) {
       const myUserAccountId = nim.V2NIMLoginService.getLoginUser()
       const othersMsgs = messages
         .filter((item) => !['beReCallMsg', 'reCallMsg'].includes(item.recallType || ''))
@@ -167,7 +185,10 @@ const Chat = observer(() => {
       }
     }
     // 如果是群聊
-    else if (conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM && teamManagerVisible) {
+    else if (
+      conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM &&
+      teamManagerVisible
+    ) {
       const myUserAccountId = nim.V2NIMLoginService.getLoginUser()
       const myMsgs = messages
         .filter((item) => !['beReCallMsg', 'reCallMsg'].includes(item.recallType || ''))
@@ -357,7 +378,15 @@ const Chat = observer(() => {
           _replyMsgsMap[msg.messageClientId] = {
             messageClientId: 'noFind'
           }
-          const { conversationType, conversationId, senderId, receiverId, messageServerId, messageClientId, createTime } = yxReplyMsg
+          const {
+            conversationType,
+            conversationId,
+            senderId,
+            receiverId,
+            messageServerId,
+            messageClientId,
+            createTime
+          } = yxReplyMsg
 
           reqMsgs.push({
             conversationId,
@@ -460,7 +489,14 @@ const Chat = observer(() => {
         <NetworkAlert />
       </div>
 
-      <MessageList conversationType={conversationType} to={to} msgs={msgs} loadingMore={loadingMore} noMore={noMore} replyMsgsMap={replyMsgsMap} />
+      <MessageList
+        conversationType={conversationType}
+        to={to}
+        msgs={msgs}
+        loadingMore={loadingMore}
+        noMore={noMore}
+        replyMsgsMap={replyMsgsMap}
+      />
 
       <MessageInput replyMsgsMap={replyMsgsMap} conversationType={conversationType} to={to} />
     </div>

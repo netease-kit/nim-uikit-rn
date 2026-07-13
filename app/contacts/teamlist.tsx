@@ -1,15 +1,25 @@
 import { router, Stack } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React, { useCallback, useEffect, useState } from 'react'
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { useNavigationLock } from '@/hooks/useNavigationLock'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import { UIKitEmptyState, UIKitRowDivider, UIKitUserAvatar, UIKitWhitePage } from '@/src/NEUIKit/rn'
 import { conversationStore, nimStore, teamStore } from '@/stores'
 
+const TEAM_LIST_ROW_HEIGHT = 78
+const TEAM_LIST_INITIAL_RENDER_COUNT = 10
+const TEAM_LIST_BATCH_RENDER_COUNT = 8
+const TEAM_LIST_WINDOW_SIZE = 8
+
 const TeamListScreen = observer(() => {
+  const { t } = useAppTranslation()
   const [loading, setLoading] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
+  const { runWithNavigationLock, isNavigationLocked } = useNavigationLock()
 
   const loadTeams = useCallback(async () => {
     setLoading(true)
@@ -19,11 +29,14 @@ const TeamListScreen = observer(() => {
       await teamStore.refreshJoinedTeams()
     } catch (error) {
       setLoadFailed(true)
-      Alert.alert('加载失败', error instanceof Error ? error.message : '群聊列表加载失败')
+      toast.alert(
+        t('commonLoadingFailed'),
+        error instanceof Error ? error.message : t('contactsTeamListLoadFailed')
+      )
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     loadTeams().catch(() => undefined)
@@ -32,24 +45,40 @@ const TeamListScreen = observer(() => {
   return (
     <UIKitWhitePage style={styles.container}>
       <Stack.Screen
-        options={{ title: '我的群聊', headerTitleAlign: 'center', headerShown: true }}
+        options={{
+          title: t('contactsTeamListTitle'),
+          headerTitleAlign: 'center',
+          headerShown: true
+        }}
       />
       <FlatList
         data={teamStore.teamList}
         keyExtractor={(item) => item.teamId}
+        removeClippedSubviews
+        initialNumToRender={TEAM_LIST_INITIAL_RENDER_COUNT}
+        maxToRenderPerBatch={TEAM_LIST_BATCH_RENDER_COUNT}
+        windowSize={TEAM_LIST_WINDOW_SIZE}
+        updateCellsBatchingPeriod={16}
+        getItemLayout={(_, index) => ({
+          length: TEAM_LIST_ROW_HEIGHT,
+          offset: TEAM_LIST_ROW_HEIGHT * index,
+          index
+        })}
         ListEmptyComponent={
           <View style={styles.emptyState}>
             {loading ? (
               <ActivityIndicator color="#337EFF" />
             ) : loadFailed ? (
               <>
-                <ThemedText style={styles.emptyBodyText}>群聊列表加载失败</ThemedText>
+                <ThemedText style={styles.emptyBodyText}>
+                  {t('contactsTeamListLoadFailed')}
+                </ThemedText>
                 <Pressable style={styles.retryButton} onPress={loadTeams}>
-                  <ThemedText style={styles.retryButtonText}>重试</ThemedText>
+                  <ThemedText style={styles.retryButtonText}>{t('commonRetry')}</ThemedText>
                 </Pressable>
               </>
             ) : (
-              <UIKitEmptyState title="暂无群聊" />
+              <UIKitEmptyState title={t('contactsTeamListEmpty')} />
             )}
           </View>
         }
@@ -57,28 +86,34 @@ const TeamListScreen = observer(() => {
           <View style={styles.rowWrap}>
             <Pressable
               style={styles.row}
+              disabled={isNavigationLocked()}
               onPress={async () => {
                 const conversationId = nimStore.nim?.V2NIMConversationIdUtil.teamConversationId(
                   item.teamId
                 )
 
                 if (!conversationId) {
-                  Alert.alert('打开失败', '当前群聊会话不可用')
+                  toast.alert(t('commonOpenFailed'), t('contactsTeamListInvalidConversation'))
                   return
                 }
 
                 try {
                   await conversationStore.createConversation(conversationId)
-                  router.push({ pathname: '/chat/[id]', params: { id: conversationId } })
+                  runWithNavigationLock(() => {
+                    router.push({ pathname: '/chat/[id]', params: { id: conversationId } })
+                  })
                 } catch (error) {
-                  Alert.alert('打开失败', error instanceof Error ? error.message : '请稍后重试')
+                  toast.alert(
+                    t('commonOpenFailed'),
+                    error instanceof Error ? error.message : t('commonRetryLater')
+                  )
                 }
               }}
             >
               <UIKitUserAvatar
-                account={item.teamId || item.name || '群聊'}
+                account={item.teamId || item.name || t('commonGroupChat')}
                 avatar={item.avatar}
-                size={64}
+                size={42}
               />
               <View style={styles.rowBody}>
                 <ThemedText numberOfLines={1} style={styles.nameText}>
@@ -130,9 +165,9 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 92,
+    minHeight: 78,
     paddingHorizontal: 20,
-    gap: 18
+    gap: 12
   },
   rowBody: {
     flex: 1

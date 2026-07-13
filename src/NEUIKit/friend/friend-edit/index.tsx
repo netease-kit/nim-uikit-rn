@@ -71,7 +71,10 @@ const FriendEdit: React.FC = observer(() => {
 
   return (
     <div className="nim-friend-edit">
-      <NavBar title={t('remarkText')} rightContent={<div onClick={handleSave}>{t('saveText')}</div>} />
+      <NavBar
+        title={t('remarkText')}
+        rightContent={<div onClick={handleSave}>{t('saveText')}</div>}
+      />
 
       <div className="group-name-input-container">
         <Input

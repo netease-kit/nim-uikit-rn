@@ -1,19 +1,23 @@
 import { Image } from 'expo-image'
-import { Stack } from 'expo-router'
+import { router, Stack } from 'expo-router'
+import { version as sdkVersion } from 'nim-web-sdk-ng/package.json'
 import React from 'react'
-import { Linking, Pressable, StyleSheet, View } from 'react-native'
+import { Pressable, StyleSheet, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { useNavigationLock } from '@/hooks/useNavigationLock'
 import { UIKitPage } from '@/src/NEUIKit/rn'
 
-const UIKIT_VERSION = '10.0.0-beta'
-const IM_SDK_VERSION = '10.9.0'
-const YUNXIN_WEBSITE = 'https://yunxin.163.com/'
+import { version as uiKitVersion } from '../../package.json'
 
 const AboutNeteaseScreen = () => {
+  const { t } = useAppTranslation()
+  const { runWithNavigationLock } = useNavigationLock()
+
   return (
     <UIKitPage style={styles.page}>
-      <Stack.Screen options={{ title: '关于云信', headerTitleAlign: 'center' }} />
+      <Stack.Screen options={{ title: t('aboutTitle'), headerTitleAlign: 'center' }} />
 
       <View style={styles.hero}>
         <Image
@@ -21,27 +25,29 @@ const AboutNeteaseScreen = () => {
           style={styles.logo}
           contentFit="contain"
         />
-        <ThemedText style={styles.heroTitle}>云信IM H5</ThemedText>
+        <ThemedText style={styles.heroTitle}>{t('aboutBrand')}</ThemedText>
       </View>
 
       <View style={styles.card}>
         <View style={styles.row}>
-          <ThemedText style={styles.rowLabel}>版本号</ThemedText>
-          <ThemedText style={styles.rowValue}>{UIKIT_VERSION}</ThemedText>
+          <ThemedText style={styles.rowLabel}>{t('aboutVersion')}</ThemedText>
+          <ThemedText style={styles.rowValue}>{uiKitVersion}</ThemedText>
         </View>
         <View style={styles.divider} />
         <View style={styles.row}>
-          <ThemedText style={styles.rowLabel}>IM版本号</ThemedText>
-          <ThemedText style={styles.rowValue}>{IM_SDK_VERSION}</ThemedText>
+          <ThemedText style={styles.rowLabel}>{t('aboutImVersion')}</ThemedText>
+          <ThemedText style={styles.rowValue}>{sdkVersion}</ThemedText>
         </View>
         <View style={styles.divider} />
         <Pressable
           style={styles.row}
-          onPress={() => {
-            Linking.openURL(YUNXIN_WEBSITE).catch(() => undefined)
-          }}
+          onPress={() =>
+            runWithNavigationLock(() => {
+              router.push('/user/product-intro' as never)
+            })
+          }
         >
-          <ThemedText style={styles.rowLabel}>产品介绍</ThemedText>
+          <ThemedText style={styles.rowLabel}>{t('aboutProductInfo')}</ThemedText>
           <ThemedText style={styles.chevron}>›</ThemedText>
         </Pressable>
       </View>

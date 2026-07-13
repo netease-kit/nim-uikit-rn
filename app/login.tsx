@@ -3,6 +3,7 @@ import { observer } from 'mobx-react-lite'
 import React, { useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -16,42 +17,83 @@ import {
 import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
 import { NIMConfig } from '@/constants/NIMConfig'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import { NEUIKitColors, UIKitButton, UIKitTextInput } from '@/src/NEUIKit/rn'
 import { authStore } from '@/stores'
+const CONSENT_SERVICE_URL = 'https://yunxin.163.com'
+const CONSENT_PRIVACY_URL = 'https://yunxin.163.com'
+
+function normalizeDigits(value: string, maxLength: number) {
+  return value.replace(/\D/g, '').slice(0, maxLength)
+}
 
 const LoginScreen = observer(() => {
+  const { t } = useAppTranslation()
   const [mobile, setMobile] = useState(NIMConfig.defaultLogin.mobile)
   const [smsCode, setSmsCode] = useState(NIMConfig.defaultLogin.smsCode)
-  const [error, setError] = useState('')
   const [showConsentModal, setShowConsentModal] = useState(false)
   const [awaitingRegistrationConfirmation, setAwaitingRegistrationConfirmation] = useState(false)
   const [focusedField, setFocusedField] = useState<'mobile' | 'smsCode' | null>(null)
-  const isAuthenticated = authStore.isAuthenticated
+  const hasValidatedSession = authStore.hasValidatedSession
   const smsCountdown = authStore.smsCountdown
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (hasValidatedSession) {
       router.replace('/' as never)
     }
-  }, [isAuthenticated])
+  }, [hasValidatedSession])
 
   const smsText = useMemo(() => {
-    return smsCountdown > 0 ? `${smsCountdown} 秒后重新获取` : '获取验证码'
-  }, [smsCountdown])
+    return smsCountdown > 0
+      ? t('loginRequestSmsCodeCountdown', { count: smsCountdown })
+      : t('loginRequestSmsCode')
+  }, [smsCountdown, t])
+
+  const handleMobileChange = (value: string) => {
+    setMobile(normalizeDigits(value, 11))
+    setAwaitingRegistrationConfirmation(false)
+  }
+
+  const handleSmsCodeChange = (value: string) => {
+    setSmsCode(normalizeDigits(value, 6))
+  }
+
+  const openConsentLink = async (url: string, fallbackMessage: string) => {
+    try {
+      await Linking.openURL(url)
+    } catch {
+      toast.info(fallbackMessage)
+    }
+  }
 
   const handleRequestSmsCode = async () => {
+    if (!authStore.validateMobile(mobile)) {
+      toast.info(t('loginInvalidSmsRequestMobile'))
+      return
+    }
+
     try {
-      setError('')
       const result = await authStore.requestSmsCode(mobile)
       setAwaitingRegistrationConfirmation(result.isFirstRegister)
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '验证码获取失败')
+      toast.info(requestError instanceof Error ? requestError.message : t('loginSmsCodeFailed'))
     }
   }
 
   const submitLogin = async (skipRegistrationCheck = false) => {
+    if (!authStore.validateMobile(mobile)) {
+      toast.info(t('loginInvalidMobile'))
+      return
+    }
+
+    if (!authStore.validateSmsCode(smsCode)) {
+      toast.info(t('loginInvalidSmsCode'))
+      return
+    }
+
     try {
-      setError('')
+      Keyboard.dismiss()
 
       if (awaitingRegistrationConfirmation && !skipRegistrationCheck) {
         setShowConsentModal(true)
@@ -61,7 +103,7 @@ const LoginScreen = observer(() => {
       await authStore.loginWithSms(mobile, smsCode)
       router.replace('/' as never)
     } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : '登录失败')
+      toast.info(loginError instanceof Error ? loginError.message : t('loginFailed'))
     }
   }
 
@@ -72,24 +114,25 @@ const LoginScreen = observer(() => {
     >
       <ThemedView style={styles.content}>
         <View style={styles.loginTabs}>
-          <ThemedText style={styles.activeTabText}>验证码登录</ThemedText>
+          <ThemedText style={styles.activeTabText}>{t('loginTitle')}</ThemedText>
           <View style={styles.activeTabIndicator} />
         </View>
+        <ThemedText style={styles.loginHint}>{t('loginHint')}</ThemedText>
 
         <ThemedView style={styles.formCard}>
           <View style={[styles.inputLine, focusedField === 'mobile' && styles.inputLineFocused]}>
             <ThemedText style={styles.prefix}>+86</ThemedText>
             <UIKitTextInput
-              placeholder="输入手机号"
+              placeholder={t('loginMobilePlaceholder')}
               keyboardType="number-pad"
               maxLength={11}
               value={mobile}
-              onChangeText={setMobile}
+              onChangeText={handleMobileChange}
               onFocus={() => setFocusedField('mobile')}
               onBlur={() => setFocusedField(null)}
             />
             {!!mobile && (
-              <Pressable style={styles.clearButton} onPress={() => setMobile('')}>
+              <Pressable style={styles.clearButton} onPress={() => handleMobileChange('')}>
                 <ThemedText style={styles.clearText}>×</ThemedText>
               </Pressable>
             )}
@@ -97,16 +140,18 @@ const LoginScreen = observer(() => {
 
           <View style={[styles.inputLine, focusedField === 'smsCode' && styles.inputLineFocused]}>
             <UIKitTextInput
-              placeholder="输入验证码"
+              placeholder={t('loginSmsCodePlaceholder')}
               keyboardType="number-pad"
+              maxLength={6}
               value={smsCode}
-              onChangeText={setSmsCode}
+              onChangeText={handleSmsCodeChange}
               onFocus={() => setFocusedField('smsCode')}
               onBlur={() => setFocusedField(null)}
             />
             <Pressable
               style={[styles.smsButton, authStore.smsCountdown > 0 && styles.smsButtonDisabled]}
               onPress={handleRequestSmsCode}
+              disabled={authStore.isRequestingSms || authStore.smsCountdown > 0}
             >
               {authStore.isRequestingSms ? (
                 <ActivityIndicator size="small" color="#337EFF" />
@@ -116,55 +161,50 @@ const LoginScreen = observer(() => {
             </Pressable>
           </View>
 
-          {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
-
           <UIKitButton
-            label="登录"
+            label={t('loginButton')}
             onPress={() => submitLogin(false)}
             disabled={authStore.isLoggingIn}
             loading={authStore.isLoggingIn}
             style={styles.loginButton}
           />
+          {authStore.isLoggingIn ? (
+            <View style={styles.loggingInHintWrap}>
+              <ThemedText style={styles.loggingInHintText}>{t('loginSigningInHint')}</ThemedText>
+            </View>
+          ) : null}
         </ThemedView>
       </ThemedView>
 
       <Modal visible={showConsentModal} transparent animationType="fade">
         <Pressable style={styles.modalOverlay} onPress={() => setShowConsentModal(false)}>
           <Pressable style={styles.modalCard} onPress={() => undefined}>
-            <ThemedText style={styles.modalTitle}>温馨提示</ThemedText>
+            <ThemedText style={styles.modalTitle}>{t('loginConsentTitle')}</ThemedText>
             <ThemedText style={styles.modalBody}>
-              该手机号尚未注册，继续登录即视为同意服务协议与隐私政策。
+              {t('loginConsentBodyPrefix')}
+              <ThemedText
+                style={styles.linkText}
+                onPress={() => openConsentLink(CONSENT_SERVICE_URL, t('loginOpenServiceFailed'))}
+              >
+                {t('loginConsentService')}
+              </ThemedText>
+              {t('loginConsentAnd')}
+              <ThemedText
+                style={styles.linkText}
+                onPress={() => openConsentLink(CONSENT_PRIVACY_URL, t('loginOpenPrivacyFailed'))}
+              >
+                {t('loginConsentPrivacy')}
+              </ThemedText>
+              {t('loginConsentBodySuffix')}
             </ThemedText>
-            <View style={styles.linkRow}>
-              <Pressable
-                onPress={async () => {
-                  try {
-                    await Linking.openURL('https://yunxin.163.com')
-                  } catch {
-                    setError('打开服务协议失败')
-                  }
-                }}
-              >
-                <ThemedText style={styles.linkText}>服务协议</ThemedText>
-              </Pressable>
-              <Pressable
-                onPress={async () => {
-                  try {
-                    await Linking.openURL('https://yunxin.163.com')
-                  } catch {
-                    setError('打开隐私政策失败')
-                  }
-                }}
-              >
-                <ThemedText style={styles.linkText}>隐私政策</ThemedText>
-              </Pressable>
-            </View>
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalSecondary]}
                 onPress={() => setShowConsentModal(false)}
               >
-                <ThemedText style={styles.modalSecondaryText}>不同意</ThemedText>
+                <ThemedText style={styles.modalSecondaryText}>
+                  {t('loginConsentDisagree')}
+                </ThemedText>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalPrimary]}
@@ -173,7 +213,7 @@ const LoginScreen = observer(() => {
                   await submitLogin(true)
                 }}
               >
-                <ThemedText style={styles.modalPrimaryText}>同意并继续</ThemedText>
+                <ThemedText style={styles.modalPrimaryText}>{t('loginConsentAgree')}</ThemedText>
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -198,7 +238,7 @@ const styles = StyleSheet.create({
     position: 'relative',
     flexDirection: 'row',
     alignItems: 'flex-end',
-    marginBottom: 72
+    marginBottom: 16
   },
   activeTabText: {
     fontSize: 28,
@@ -214,6 +254,12 @@ const styles = StyleSheet.create({
     height: 3,
     borderRadius: 2,
     backgroundColor: NEUIKitColors.primary
+  },
+  loginHint: {
+    color: '#666D78',
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 52
   },
   formCard: {
     backgroundColor: '#FFFFFF',
@@ -273,11 +319,6 @@ const styles = StyleSheet.create({
     color: '#337EFF',
     fontWeight: '500'
   },
-  errorText: {
-    color: '#B42318',
-    fontSize: 13,
-    lineHeight: 18
-  },
   loginButton: {
     marginTop: 52,
     minHeight: 50,
@@ -285,6 +326,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#337EFF',
     alignItems: 'center',
     justifyContent: 'center'
+  },
+  loggingInHintWrap: {
+    marginTop: -12,
+    alignItems: 'center'
+  },
+  loggingInHintText: {
+    color: '#6B7280',
+    fontSize: 13,
+    lineHeight: 18
   },
   loginButtonDisabled: {
     opacity: 0.7
@@ -317,10 +367,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 22,
     color: '#4A525E'
-  },
-  linkRow: {
-    flexDirection: 'row',
-    gap: 18
   },
   linkText: {
     fontSize: 13,

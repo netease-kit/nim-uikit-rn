@@ -18,7 +18,11 @@ export const ConversationsPage = observer(() => {
         data={sessionStore.sessions}
         keyExtractor={(item) => item.sessionId}
         renderItem={({ item }) => (
-          <Pressable onPress={() => {/* TODO: navigate to chat */}}>
+          <Pressable
+            onPress={() => {
+              /* TODO: navigate to chat */
+            }}
+          >
             <Text>{item.title}</Text>
             <Text>{item.lastMessageText}</Text>
           </Pressable>

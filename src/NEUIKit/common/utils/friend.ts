@@ -33,7 +33,11 @@ export const friendGroupByPy = <
         const en = '*abcdefghjklmnopqrstwxyz'.split('')
 
         const zh = '阿八嚓哒妸发旮哈讥咔垃痳拏噢妑七呥扨它穵夕丫帀'.split('')
-        let k = en.find((k, ki) => (!zh[ki - 1] || zh[ki - 1].localeCompare(str, 'zh') <= 0) && str.localeCompare(zh[ki], 'zh') == -1)
+        let k = en.find(
+          (k, ki) =>
+            (!zh[ki - 1] || zh[ki - 1].localeCompare(str, 'zh') <= 0) &&
+            str.localeCompare(zh[ki], 'zh') == -1
+        )
         if (k && k !== '*') {
           add(k, item)
         } else {
@@ -48,7 +52,9 @@ export const friendGroupByPy = <
   })
 
   const data = Object.keys(res).map((k) => ({ key: k, data: res[k] }))
-  const sortData = data.filter((item) => item.key !== OTHER_TAG).sort((a, b) => a.key.localeCompare(b.key, 'en'))
+  const sortData = data
+    .filter((item) => item.key !== OTHER_TAG)
+    .sort((a, b) => a.key.localeCompare(b.key, 'en'))
   const otherData = data.filter((item) => item.key === OTHER_TAG)
 
   return sortData.concat(otherData)

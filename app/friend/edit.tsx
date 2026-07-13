@@ -1,14 +1,18 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React, { useMemo, useState } from 'react'
-import { Alert, StyleSheet, TouchableOpacity, View } from 'react-native'
+import { StyleSheet, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { ThemedText } from '@/components/ThemedText'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import { UIKitTextInput } from '@/src/NEUIKit/rn'
 import { friendStore } from '@/stores'
+import { ensureNetworkAvailable, NETWORK_UNAVAILABLE_MESSAGE } from '@/utils/network'
 
 const FriendEditScreen = observer(() => {
+  const { t } = useAppTranslation()
   const insets = useSafeAreaInsets()
   const { accountId } = useLocalSearchParams<{ accountId?: string }>()
   const resolvedAccountId = typeof accountId === 'string' ? accountId : ''
@@ -22,26 +26,30 @@ const FriendEditScreen = observer(() => {
 
       <View style={styles.topBar}>
         <TouchableOpacity onPress={() => router.back()}>
-          <ThemedText style={styles.cancelText}>取消</ThemedText>
+          <ThemedText style={styles.cancelText}>{t('actionCancel')}</ThemedText>
         </TouchableOpacity>
-        <ThemedText style={styles.titleText}>备注名</ThemedText>
+        <ThemedText style={styles.titleText}>{t('friendRemarkTitle')}</ThemedText>
         <TouchableOpacity
           onPress={async () => {
             try {
+              await ensureNetworkAvailable()
               await friendStore.updateAlias(resolvedAccountId, alias.trim())
               router.back()
             } catch (error) {
-              Alert.alert('保存失败', error instanceof Error ? error.message : '请稍后重试')
+              toast.alert(
+                t('saveFailed'),
+                error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE
+              )
             }
           }}
         >
-          <ThemedText style={styles.saveText}>保存</ThemedText>
+          <ThemedText style={styles.saveText}>{t('actionSave')}</ThemedText>
         </TouchableOpacity>
       </View>
 
       <View style={styles.inputCard}>
         <UIKitTextInput
-          placeholder="请输入备注名"
+          placeholder={t('friendEditPlaceholder')}
           value={alias}
           maxLength={15}
           onChangeText={setAlias}

@@ -1,25 +1,34 @@
 import { Image } from 'expo-image'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
-  Alert,
+  FlatList,
+  Keyboard,
+  ListRenderItemInfo,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View
 } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import {
   getUIKitAppellation,
+  getUIKitAvatarUri,
+  getUIKitUserAvatarLabel,
   UIKitChatEmptyState,
   UIKitChatHeaderTitle,
+  UIKitChatHighlightText,
   UIKitChatSearchBar,
   UIKitSelectionIndicator
 } from '@/src/NEUIKit/rn'
@@ -27,29 +36,19 @@ import {
   conversationStore,
   forwardStore,
   friendStore,
+  imStoreV2Bridge,
   messageStore,
   nimStore,
   teamStore,
   userStore
 } from '@/stores'
 import {
-  getForwardPreview,
   getMergedForwardNestedLevel,
-  getMessageKey,
   isForwardableMessage,
-  MAX_FORWARD_TARGETS,
-  MergedForwardPayload,
-  parseMergedForwardPayload
+  MAX_FORWARD_TARGETS
 } from '@/utils/messageForward'
 import { ensureNetworkAvailable, NETWORK_UNAVAILABLE_MESSAGE } from '@/utils/network'
-import {
-  V2NIMConversationType,
-  V2NIMMessage,
-  V2NIMMessageAudioAttachment,
-  V2NIMMessageFileAttachment,
-  V2NIMMessageLocationAttachment,
-  V2NIMMessageVideoAttachment
-} from '@/utils/nim-sdk'
+import { V2NIMConversationType, V2NIMMessage, V2NIMMessageSendingState } from '@/utils/nim-sdk'
 
 type ForwardMode = 'single' | 'serial' | 'merged'
 
@@ -60,7 +59,43 @@ type ForwardTarget = {
   subtitle: string
   avatar?: string
   conversationType: V2NIMConversationType
+  memberCount?: number
   valid: boolean
+}
+
+type ForwardAIUser = {
+  accountId: string
+}
+
+type ForwardConversationSource = {
+  conversationId: string
+  name?: string
+  avatar?: string
+  sortOrder?: number
+  stickTop?: boolean
+  lastMessage?: { messageRefer?: { createTime?: number } }
+}
+
+type ForwardTargetTab = 'recentChats' | 'friends' | 'groups'
+
+const FORWARD_PAGE_HORIZONTAL_PADDING = 16
+const RECENT_FORWARD_COLUMNS = 5
+const RECENT_FORWARD_GAP = 8
+const RECENT_FORWARD_AVATAR_SIZE = 44
+const CONFIRM_TARGET_AVATAR_LIMIT = 6
+const CONFIRM_MULTI_TARGET_AVATAR_SIZE = 40
+const FORWARD_PREVIEW_TITLE_TOKEN = '{title}'
+const FORWARD_TARGET_ROW_HEIGHT = 56
+const FORWARD_TARGET_INITIAL_RENDER_COUNT = 14
+const FORWARD_TARGET_BATCH_RENDER_COUNT = 16
+const FORWARD_TARGET_WINDOW_SIZE = 10
+
+function hasRealConversationContent(conversation: { lastMessage?: unknown }) {
+  return !!conversation.lastMessage
+}
+
+function hasRetainedP2PConversation(conversation?: { lastMessage?: unknown } | null) {
+  return !!conversation && hasRealConversationContent(conversation)
 }
 
 function getMessageDisplayName(
@@ -80,106 +115,126 @@ function getMessageDisplayName(
 function getForwardModeLabel(mode: ForwardMode) {
   switch (mode) {
     case 'serial':
-      return '逐条转发'
+      return 'forwardModeSerial'
     case 'merged':
-      return '合并转发'
+      return 'forwardModeMerged'
     default:
-      return '转发'
+      return 'forwardModeSingle'
   }
 }
 
-function getAttachmentSource(
-  attachment?:
-    | V2NIMMessageFileAttachment
-    | V2NIMMessageAudioAttachment
-    | V2NIMMessageVideoAttachment
-    | null
+function getForwardTargetTitle(
+  targetId: string,
+  conversationType: V2NIMConversationType,
+  fallbackName?: string
 ) {
-  return attachment?.url || attachment?.path || ''
+  if (conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM) {
+    return fallbackName || targetId
+  }
+
+  return getUIKitAppellation({ account: targetId }) || fallbackName || targetId
 }
 
-function buildMergedForwardPayload(
-  messages: V2NIMMessage[],
-  sourceTitle: string,
-  sourceConversationType?: V2NIMConversationType,
-  sourceTargetId?: string
+function getForwardTargetAvatar(
+  targetId: string,
+  conversationType: V2NIMConversationType,
+  explicitAvatar?: string
 ) {
-  const sortedMessages = messages.slice().sort((left, right) => left.createTime - right.createTime)
-  const items = sortedMessages.map((message) => {
-    const nestedPayload = parseMergedForwardPayload(message)
+  if (conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM) {
+    return explicitAvatar || ''
+  }
 
-    return {
-      messageId: getMessageKey(message),
-      senderId: message.senderId,
-      senderName: getMessageDisplayName(message.senderId, sourceConversationType, sourceTargetId),
-      createTime: message.createTime,
-      messageType: message.messageType,
-      preview: getForwardPreview(message),
-      text: message.text,
-      attachmentName: (message.attachment as V2NIMMessageFileAttachment | undefined)?.name,
-      attachmentUrl: getAttachmentSource(
-        message.attachment as
-          | V2NIMMessageFileAttachment
-          | V2NIMMessageAudioAttachment
-          | V2NIMMessageVideoAttachment
-          | undefined
-      ),
-      attachmentSize: (message.attachment as V2NIMMessageFileAttachment | undefined)?.size,
-      attachmentDuration: (
-        message.attachment as V2NIMMessageAudioAttachment | V2NIMMessageVideoAttachment | undefined
-      )?.duration,
-      attachmentWidth: (message.attachment as V2NIMMessageVideoAttachment | undefined)?.width,
-      attachmentHeight: (message.attachment as V2NIMMessageVideoAttachment | undefined)?.height,
-      attachmentAddress: (message.attachment as V2NIMMessageLocationAttachment | undefined)
-        ?.address,
-      attachmentLatitude: (message.attachment as V2NIMMessageLocationAttachment | undefined)
-        ?.latitude,
-      attachmentLongitude: (message.attachment as V2NIMMessageLocationAttachment | undefined)
-        ?.longitude,
-      mergedPayload: nestedPayload || undefined
+  return getUIKitAvatarUri(targetId, explicitAvatar)
+}
+
+function getForwardTargetSubtitle(targetId: string, conversationType: V2NIMConversationType) {
+  if (conversationType !== V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM) {
+    return targetId
+  }
+
+  const memberCount = teamStore.getMembers(targetId).length
+  return memberCount > 0 ? `__GROUP_COUNT__${memberCount}` : '__GROUP_FALLBACK__'
+}
+
+function sortForwardConversations<T extends ForwardConversationSource>(conversations: T[]) {
+  return conversations.slice().sort((left, right) => {
+    if (!!left.stickTop !== !!right.stickTop) {
+      return left.stickTop ? -1 : 1
     }
-  })
 
-  return {
-    title: `${sourceTitle || '聊天'}的消息`,
-    previewList: items.slice(0, 3).map((item) => `${item.senderName}: ${item.preview}`),
-    nestedLevel: Math.max(
-      1,
-      ...sortedMessages.map((message) => getMergedForwardNestedLevel(message) + 1)
-    ),
-    messages: items
-  } as MergedForwardPayload
+    const leftTime = left.sortOrder || left.lastMessage?.messageRefer?.createTime || 0
+    const rightTime = right.sortOrder || right.lastMessage?.messageRefer?.createTime || 0
+
+    return rightTime - leftTime
+  })
+}
+
+function getForwardPayloadSourceTitle(
+  sourceConversationType?: V2NIMConversationType,
+  sourceTargetId?: string,
+  sourceConversationName?: string
+) {
+  if (!sourceTargetId) {
+    return sourceConversationName || ''
+  }
+
+  if (sourceConversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM) {
+    return teamStore.getTeam(sourceTargetId)?.name || sourceConversationName || sourceTargetId
+  }
+
+  const user = userStore.users.get(sourceTargetId)
+  const selfProfile =
+    userStore.selfProfile?.accountId === sourceTargetId ? userStore.selfProfile : null
+  const friend = friendStore.friends.get(sourceTargetId)
+
+  return user?.name || selfProfile?.name || friend?.userProfile?.name || sourceTargetId
 }
 
 function buildConfirmPreview(
   mode: ForwardMode,
   messages: V2NIMMessage[],
+  sourceTitle?: string,
   sourceConversationType?: V2NIMConversationType,
   sourceTargetId?: string
 ) {
   if (messages.length === 0) {
-    return '未找到可转发的消息'
+    return '__FORWARD_EMPTY__'
   }
 
-  if (messages.length === 1 && mode === 'single') {
-    return getForwardPreview(messages[0])
-  }
+  const title =
+    sourceTitle ||
+    getMessageDisplayName(messages[0].senderId, sourceConversationType, sourceTargetId)
 
-  return `[${getForwardModeLabel(mode)}]${getMessageDisplayName(
-    messages[0].senderId,
-    sourceConversationType,
-    sourceTargetId
-  )}的会话记录`
+  return JSON.stringify({
+    type: 'forward-preview',
+    modeKey: getForwardModeLabel(mode),
+    title
+  })
+}
+
+function splitForwardPreviewTemplate(template: string, title: string) {
+  const [prefix, suffix = ''] = template.split(FORWARD_PREVIEW_TITLE_TOKEN)
+
+  return {
+    prefix,
+    title,
+    suffix
+  }
 }
 
 const ForwardMessageScreen = observer(() => {
-  const { conversationId, messageId, messageIds, mode, sourceTitle } = useLocalSearchParams<{
-    conversationId?: string
-    messageId?: string
-    messageIds?: string
-    mode?: string
-    sourceTitle?: string
-  }>()
+  const { t } = useAppTranslation()
+  const { width: windowWidth } = useWindowDimensions()
+  const { conversationId, messageId, messageIds, mode, source, sourceTitle, sourcePayloadTitle } =
+    useLocalSearchParams<{
+      conversationId?: string
+      messageId?: string
+      messageIds?: string
+      mode?: string
+      source?: string
+      sourceTitle?: string
+      sourcePayloadTitle?: string
+    }>()
   const [keyword, setKeyword] = useState('')
   const [confirmVisible, setConfirmVisible] = useState(false)
   const [comment, setComment] = useState('')
@@ -187,9 +242,21 @@ const ForwardMessageScreen = observer(() => {
   const [pendingTargetId, setPendingTargetId] = useState<string | null>(null)
   const [recentForwardLoading, setRecentForwardLoading] = useState(false)
   const [recentForwardLoadFailed, setRecentForwardLoadFailed] = useState(false)
+  const [recentForwardLoaded, setRecentForwardLoaded] = useState(false)
+  const [activeTargetTab, setActiveTargetTab] = useState<ForwardTargetTab>('recentChats')
+  const [keyboardBottomInset, setKeyboardBottomInset] = useState(0)
+  const forwardConfirmLockRef = useRef(false)
+  const [targetSnapshot, setTargetSnapshot] = useState<{
+    recentForwardTargets: ForwardTarget[]
+    friendTargets: ForwardTarget[]
+    teamTargets: ForwardTarget[]
+  } | null>(null)
 
   const sourceConversationId = typeof conversationId === 'string' ? conversationId : ''
-  const sourceConversation = conversationStore.getConversation(sourceConversationId)
+  const isCollectionSource = source === 'collection'
+  const sourceConversation =
+    imStoreV2Bridge.getConversation(sourceConversationId) ||
+    conversationStore.getConversation(sourceConversationId)
   const sourceConversationType =
     nimStore.nim?.V2NIMConversationIdUtil.parseConversationType(sourceConversationId)
   const sourceTargetId =
@@ -198,7 +265,60 @@ const ForwardMessageScreen = observer(() => {
     mode === 'serial' || mode === 'merged' || mode === 'single' ? mode : 'single'
   ) as ForwardMode
   const normalizedKeyword = keyword.trim().toLowerCase()
+  const aiUsers = imStoreV2Bridge.aiUsers as ForwardAIUser[]
+  const aiAccountIds = useMemo(() => new Set(aiUsers.map((item) => item.accountId)), [aiUsers])
+  const recentForwardConversationIds = messageStore.recentForwardConversationIds
+  const hasBoundImConversationStore = imStoreV2Bridge.hasBoundStore
+  const preferCloudConversation = imStoreV2Bridge.preferCloudConversation
+  const imDisplayConversations = imStoreV2Bridge.displayConversations as ForwardConversationSource[]
+  const friendSections = friendStore.friendSections
+  const forwardRecentConversationSources = useMemo(() => {
+    if (!hasBoundImConversationStore) {
+      return conversationStore.conversations as ForwardConversationSource[]
+    }
 
+    if (preferCloudConversation) {
+      return sortForwardConversations(imDisplayConversations)
+    }
+
+    const merged = new Map<string, ForwardConversationSource>()
+
+    imDisplayConversations.forEach((conversation) => {
+      if (conversation.conversationId) {
+        merged.set(conversation.conversationId, conversation)
+      }
+    })
+    conversationStore.conversations.forEach((conversation) => {
+      const conversationId = conversation.conversationId
+
+      if (!conversationId || merged.has(conversationId)) {
+        return
+      }
+
+      if (conversationStore.isConversationLocallyHidden(conversationId)) {
+        return
+      }
+
+      const hasLocalPreview =
+        !!conversation.lastMessage ||
+        messageStore.getConversationMessages(conversationId).list.length > 0
+
+      if (hasLocalPreview) {
+        merged.set(conversationId, conversation as ForwardConversationSource)
+      }
+    })
+
+    return sortForwardConversations(Array.from(merged.values()))
+  }, [hasBoundImConversationStore, imDisplayConversations, preferCloudConversation])
+  const forwardFriendSources = useMemo(() => {
+    return friendSections.flatMap((section) => section.data)
+  }, [friendSections])
+  const recentForwardItemWidth = Math.floor(
+    (windowWidth -
+      FORWARD_PAGE_HORIZONTAL_PADDING * 2 -
+      RECENT_FORWARD_GAP * (RECENT_FORWARD_COLUMNS - 1)) /
+      RECENT_FORWARD_COLUMNS
+  )
   const loadRecentForwardTargets = useCallback(async () => {
     setRecentForwardLoading(true)
     setRecentForwardLoadFailed(false)
@@ -207,11 +327,15 @@ const ForwardMessageScreen = observer(() => {
       await messageStore.loadRecentForwardConversations()
     } catch (error) {
       setRecentForwardLoadFailed(true)
-      Alert.alert('加载失败', error instanceof Error ? error.message : '最近转发加载失败')
+      toast.alert(
+        t('commonLoadingFailed'),
+        error instanceof Error ? error.message : t('forwardRecentLoadFailed')
+      )
     } finally {
       setRecentForwardLoading(false)
+      setRecentForwardLoaded(true)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     loadRecentForwardTargets().catch(() => undefined)
@@ -221,6 +345,22 @@ const ForwardMessageScreen = observer(() => {
       forwardStore.reset()
     }
   }, [loadRecentForwardTargets])
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide'
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardBottomInset(Math.max(0, event.endCoordinates.height - 24))
+    })
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      setKeyboardBottomInset(0)
+    })
+
+    return () => {
+      showSubscription.remove()
+      hideSubscription.remove()
+    }
+  }, [])
 
   const rawMessageIds = useMemo(() => {
     if (typeof messageIds === 'string' && messageIds.trim()) {
@@ -234,107 +374,225 @@ const ForwardMessageScreen = observer(() => {
     return []
   }, [messageId, messageIds])
 
-  const sourceMessages = useMemo(
-    () =>
-      rawMessageIds
-        .map((item) => messageStore.getMessageById(sourceConversationId, item))
+  const sourceMessages = useMemo(() => {
+    const snapshotMessages = isCollectionSource
+      ? forwardStore.getSourceMessages(sourceConversationId)
+      : []
+    const messageSources = snapshotMessages.length > 0 ? snapshotMessages : []
+
+    if (messageSources.length > 0) {
+      return rawMessageIds
+        .map(
+          (item) =>
+            messageSources.find(
+              (message) => message.messageClientId === item || message.messageServerId === item
+            ) || null
+        )
         .filter(Boolean)
-        .sort((left, right) => left!.createTime - right!.createTime) as V2NIMMessage[],
-    [rawMessageIds, sourceConversationId]
-  )
+        .sort((left, right) => left!.createTime - right!.createTime) as V2NIMMessage[]
+    }
+
+    return rawMessageIds
+      .map((item) => messageStore.getMessageById(sourceConversationId, item))
+      .filter(Boolean)
+      .sort((left, right) => left!.createTime - right!.createTime) as V2NIMMessage[]
+  }, [isCollectionSource, rawMessageIds, sourceConversationId])
 
   const forwardableMessages = useMemo(() => {
+    if (forwardMode === 'merged') {
+      return sourceMessages.filter(
+        (message) =>
+          (isCollectionSource || !messageStore.getRevokedText(message)) &&
+          (isCollectionSource ||
+            message.sendingState === V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED)
+      )
+    }
+
+    if (isCollectionSource) {
+      return sourceMessages.filter(
+        (message) => !!messageStore.createCollectionForwardSourceMessage(message)
+      )
+    }
+
     return sourceMessages.filter((message) =>
-      isForwardableMessage(message, messageStore.getRevokedText(message))
+      isForwardableMessage(
+        message,
+        isCollectionSource ? null : messageStore.getRevokedText(message)
+      )
     )
-  }, [sourceMessages])
+  }, [forwardMode, isCollectionSource, sourceMessages])
 
-  const recentForwardTargets = messageStore.recentForwardConversationIds
-    .map((item) => conversationStore.getConversation(item))
-    .filter(Boolean)
-    .map((conversation) => {
-      const targetId = nimStore.nim!.V2NIMConversationIdUtil.parseConversationTargetId(
-        conversation!.conversationId
-      )
-      const conversationType = nimStore.nim!.V2NIMConversationIdUtil.parseConversationType(
-        conversation!.conversationId
-      )
+  const recentForwardTargets = useMemo(
+    () =>
+      !nimStore.nim
+        ? []
+        : recentForwardConversationIds.flatMap((conversationId) => {
+            const targetId =
+              nimStore.nim!.V2NIMConversationIdUtil.parseConversationTargetId(conversationId)
+            const conversationType =
+              nimStore.nim!.V2NIMConversationIdUtil.parseConversationType(conversationId)
+            const conversation =
+              imStoreV2Bridge.getConversation(conversationId) ||
+              conversationStore.getConversation(conversationId)
+            const team = teamStore.getTeam(targetId)
+            const friend = friendStore.friends.get(targetId)
+            const valid =
+              conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
+                ? !!team || !!conversation
+                : true
 
-      return {
-        conversationId: conversation!.conversationId,
-        targetId,
-        title: conversation!.name || userStore.getDisplayName(targetId),
-        subtitle:
-          conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
-            ? `群聊 · ${targetId}`
-            : targetId,
-        avatar: conversation!.avatar,
-        conversationType,
-        valid:
-          conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
-            ? !!teamStore.getTeam(targetId)
-            : !!friendStore.friends.get(targetId) || targetId === nimStore.getLoginUser()
-      } as ForwardTarget
+            if (!valid) {
+              return []
+            }
+
+            return [
+              {
+                conversationId,
+                targetId,
+                title: getForwardTargetTitle(
+                  targetId,
+                  conversationType,
+                  conversation?.name || team?.name || friend?.userProfile?.name
+                ),
+                subtitle: getForwardTargetSubtitle(targetId, conversationType),
+                avatar: getForwardTargetAvatar(
+                  targetId,
+                  conversationType,
+                  conversation?.avatar || team?.avatar || friend?.userProfile?.avatar
+                ),
+                conversationType,
+                memberCount:
+                  conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
+                    ? team?.memberCount || teamStore.getMembers(targetId).length || 0
+                    : undefined,
+                valid
+              } as ForwardTarget
+            ]
+          }),
+    [recentForwardConversationIds]
+  )
+
+  const recentConversationTargets = useMemo(
+    () =>
+      !nimStore.nim
+        ? []
+        : forwardRecentConversationSources.flatMap((conversation) => {
+            const targetId = nimStore.nim!.V2NIMConversationIdUtil.parseConversationTargetId(
+              conversation.conversationId
+            )
+            const conversationType = nimStore.nim!.V2NIMConversationIdUtil.parseConversationType(
+              conversation.conversationId
+            )
+            const team = teamStore.getTeam(targetId)
+            const friend = friendStore.friends.get(targetId)
+            const valid =
+              conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
+                ? !!team
+                : !!friend ||
+                  hasRetainedP2PConversation(conversation) ||
+                  targetId === nimStore.getLoginUser()
+
+            if (
+              conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P &&
+              aiAccountIds.has(targetId) &&
+              !hasRealConversationContent(conversation)
+            ) {
+              return []
+            }
+
+            if (!valid) {
+              return []
+            }
+
+            return [
+              {
+                conversationId: conversation.conversationId,
+                targetId,
+                title: getForwardTargetTitle(
+                  targetId,
+                  conversationType,
+                  conversation.name || team?.name || friend?.userProfile?.name
+                ),
+                subtitle: getForwardTargetSubtitle(targetId, conversationType),
+                avatar: getForwardTargetAvatar(
+                  targetId,
+                  conversationType,
+                  conversation.avatar || team?.avatar || friend?.userProfile?.avatar
+                ),
+                conversationType,
+                memberCount:
+                  conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
+                    ? team?.memberCount || teamStore.getMembers(targetId).length || 0
+                    : undefined,
+                valid
+              } as ForwardTarget
+            ]
+          }),
+    [aiAccountIds, forwardRecentConversationSources]
+  )
+
+  const friendTargets = useMemo(
+    () =>
+      !nimStore.nim
+        ? []
+        : forwardFriendSources
+            .filter((friend) => !aiAccountIds.has(friend.accountId))
+            .map((friend) => {
+              const conversationType = V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P
+
+              return {
+                conversationId: nimStore.nim!.V2NIMConversationIdUtil.p2pConversationId(
+                  friend.accountId
+                ),
+                targetId: friend.accountId,
+                title: friend.appellation,
+                subtitle: friend.accountId,
+                avatar: getForwardTargetAvatar(friend.accountId, conversationType, friend.avatar),
+                conversationType,
+                valid: true
+              } as ForwardTarget
+            }),
+    [aiAccountIds, forwardFriendSources]
+  )
+
+  const teamTargets = useMemo(
+    () =>
+      !nimStore.nim
+        ? []
+        : teamStore.teamList.map((team) => ({
+            conversationId: nimStore.nim!.V2NIMConversationIdUtil.teamConversationId(team.teamId),
+            targetId: team.teamId,
+            title: team.name || team.teamId,
+            subtitle: getForwardTargetSubtitle(
+              team.teamId,
+              V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
+            ),
+            avatar: team.avatar,
+            conversationType: V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM,
+            memberCount: team.memberCount || teamStore.getMembers(team.teamId).length || 0,
+            valid: true
+          })),
+    []
+  )
+
+  useEffect(() => {
+    if (!nimStore.nim || !recentForwardLoaded || targetSnapshot) {
+      return
+    }
+
+    setTargetSnapshot({
+      recentForwardTargets,
+      friendTargets,
+      teamTargets
     })
+  }, [friendTargets, recentForwardLoaded, recentForwardTargets, targetSnapshot, teamTargets])
 
-  const recentConversationTargets = !nimStore.nim
-    ? []
-    : conversationStore.conversations.slice(0, 100).map((conversation) => {
-        const targetId = nimStore.nim!.V2NIMConversationIdUtil.parseConversationTargetId(
-          conversation.conversationId
-        )
-        const conversationType = nimStore.nim!.V2NIMConversationIdUtil.parseConversationType(
-          conversation.conversationId
-        )
-        const team = teamStore.getTeam(targetId)
-        const friend = friendStore.friends.get(targetId)
-
-        return {
-          conversationId: conversation.conversationId,
-          targetId,
-          title:
-            conversation.name ||
-            team?.name ||
-            friend?.alias ||
-            friend?.userProfile?.name ||
-            userStore.getDisplayName(targetId),
-          subtitle:
-            conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
-              ? `群聊 · ${targetId}`
-              : targetId,
-          avatar: conversation.avatar || team?.avatar || friend?.userProfile?.avatar,
-          conversationType,
-          valid:
-            conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
-              ? !!team
-              : !!friend || targetId === nimStore.getLoginUser()
-        } as ForwardTarget
-      })
-
-  const friendTargets = !nimStore.nim
-    ? []
-    : friendStore.friendList.map((friend) => ({
-        conversationId: nimStore.nim!.V2NIMConversationIdUtil.p2pConversationId(friend.accountId),
-        targetId: friend.accountId,
-        title:
-          friend.alias || friend.userProfile?.name || userStore.getDisplayName(friend.accountId),
-        subtitle: friend.accountId,
-        avatar: friend.userProfile?.avatar,
-        conversationType: V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P,
-        valid: true
-      }))
-
-  const teamTargets = !nimStore.nim
-    ? []
-    : teamStore.teamList.map((team) => ({
-        conversationId: nimStore.nim!.V2NIMConversationIdUtil.teamConversationId(team.teamId),
-        targetId: team.teamId,
-        title: team.name || team.teamId,
-        subtitle: `群聊 · ${team.teamId}`,
-        avatar: team.avatar,
-        conversationType: V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM,
-        valid: true
-      }))
+  const stableRecentForwardTargets = targetSnapshot?.recentForwardTargets || recentForwardTargets
+  const stableRecentConversationTargets = recentConversationTargets
+  const stableFriendTargets = targetSnapshot?.friendTargets || friendTargets
+  const stableTeamTargets = targetSnapshot?.teamTargets || teamTargets
+  const selectedConversationIds = forwardStore.selectedConversationIds
+  const isMultiTargetMode = forwardStore.multiTargetMode
 
   const filterTargets = (targets: ForwardTarget[]) =>
     targets.filter((item) => {
@@ -349,60 +607,105 @@ const ForwardMessageScreen = observer(() => {
       )
     })
 
-  const displayedRecentForwardTargets = filterTargets(recentForwardTargets)
-  const displayedRecentConversationTargets = filterTargets(recentConversationTargets)
-  const displayedFriendTargets = filterTargets(friendTargets)
-  const displayedTeamTargets = filterTargets(teamTargets)
+  const displayedRecentForwardTargets = filterTargets(stableRecentForwardTargets)
+  const displayedRecentConversationTargets = filterTargets(stableRecentConversationTargets)
+  const displayedFriendTargets = filterTargets(stableFriendTargets)
+  const displayedTeamTargets = filterTargets(stableTeamTargets)
+  const shouldShowRecentForwardSection =
+    !normalizedKeyword &&
+    (recentForwardLoading || recentForwardLoadFailed || displayedRecentForwardTargets.length > 0)
 
-  const targetMap = new Map<string, ForwardTarget>()
+  const targetMap = useMemo(() => {
+    const nextTargetMap = new Map<string, ForwardTarget>()
 
-  ;[
-    ...recentForwardTargets,
-    ...recentConversationTargets,
-    ...friendTargets,
-    ...teamTargets
-  ].forEach((item) => {
-    targetMap.set(item.conversationId, item)
-  })
+    ;[
+      ...stableRecentForwardTargets,
+      ...stableRecentConversationTargets,
+      ...stableFriendTargets,
+      ...stableTeamTargets
+    ].forEach((item) => {
+      nextTargetMap.set(item.conversationId, item)
+    })
 
-  const selectedTargets = forwardStore.selectedConversationIds
-    .map((item) => targetMap.get(item))
-    .filter(Boolean) as ForwardTarget[]
-  const confirmTargets = pendingTargetId
-    ? ([targetMap.get(pendingTargetId)].filter(Boolean) as ForwardTarget[])
-    : selectedTargets
+    return nextTargetMap
+  }, [
+    stableFriendTargets,
+    stableRecentConversationTargets,
+    stableRecentForwardTargets,
+    stableTeamTargets
+  ])
+  const selectedConversationIdSet = useMemo(
+    () => new Set(selectedConversationIds),
+    [selectedConversationIds]
+  )
+  const selectedTargets = useMemo(
+    () =>
+      selectedConversationIds.map((item) => targetMap.get(item)).filter(Boolean) as ForwardTarget[],
+    [selectedConversationIds, targetMap]
+  )
+  const confirmTargets = useMemo(
+    () =>
+      pendingTargetId
+        ? ([targetMap.get(pendingTargetId)].filter(Boolean) as ForwardTarget[])
+        : selectedTargets,
+    [pendingTargetId, selectedTargets, targetMap]
+  )
+  const visibleConfirmTargets = confirmTargets.slice(0, CONFIRM_TARGET_AVATAR_LIMIT)
 
-  const handleTargetPress = (target: ForwardTarget) => {
-    if (!target.valid) {
-      Alert.alert('无法转发', '目标会话已失效，请重新选择有效的联系人或群聊')
+  const handleTargetPress = useCallback(
+    (target: ForwardTarget) => {
+      if (!target.valid) {
+        toast.alert(t('forwardUnavailableTitle'), t('forwardUnavailableMessage'))
+        return
+      }
+
+      if (!isMultiTargetMode) {
+        setPendingTargetId(target.conversationId)
+        setConfirmVisible(true)
+        return
+      }
+
+      if (
+        !selectedConversationIdSet.has(target.conversationId) &&
+        selectedConversationIds.length >= MAX_FORWARD_TARGETS
+      ) {
+        toast.alert(
+          t('chatActionFailedTitle'),
+          t('forwardMaxTargets', { count: MAX_FORWARD_TARGETS })
+        )
+        return
+      }
+
+      forwardStore.toggleConversation(target.conversationId)
+    },
+    [isMultiTargetMode, selectedConversationIdSet, selectedConversationIds.length, t]
+  )
+
+  const canLoadMoreRecentConversationTargets = hasBoundImConversationStore
+    ? !imStoreV2Bridge.isLoadingMore && imStoreV2Bridge.hasMoreConversations
+    : !conversationStore.isLoadingMore && conversationStore.hasMore
+
+  const prefetchMoreRecentConversationTargets = useCallback(() => {
+    if (!canLoadMoreRecentConversationTargets) {
       return
     }
 
-    if (!forwardStore.multiTargetMode) {
-      setPendingTargetId(target.conversationId)
-      setConfirmVisible(true)
+    if (hasBoundImConversationStore) {
+      imStoreV2Bridge.loadMoreConversations().catch(() => undefined)
       return
     }
 
-    if (
-      !forwardStore.selectedConversationIds.includes(target.conversationId) &&
-      forwardStore.selectedConversationIds.length >= MAX_FORWARD_TARGETS
-    ) {
-      Alert.alert('操作失败', `最多选择${MAX_FORWARD_TARGETS}个会话`)
-      return
-    }
-
-    forwardStore.toggleConversation(target.conversationId)
-  }
+    conversationStore.loadMoreConversations().catch(() => undefined)
+  }, [canLoadMoreRecentConversationTargets, hasBoundImConversationStore])
 
   const openConfirmForSelectedTargets = () => {
-    if (!forwardStore.multiTargetMode) {
+    if (!isMultiTargetMode) {
       forwardStore.setMultiTargetMode(true)
       return
     }
 
     if (selectedTargets.length === 0) {
-      Alert.alert('操作失败', '请至少选择一个有效会话')
+      toast.alert(t('chatActionFailedTitle'), t('forwardSelectAtLeastOne'))
       return
     }
 
@@ -411,19 +714,19 @@ const ForwardMessageScreen = observer(() => {
   }
 
   const handleConfirmForward = async () => {
-    if (sourceMessages.length === 0 || submitting) {
+    if (sourceMessages.length === 0 || submitting || forwardConfirmLockRef.current) {
       return
     }
 
     if (confirmTargets.length === 0) {
-      Alert.alert('转发失败', '请选择有效的转发会话')
+      toast.alert(t('forwardFailedTitle'), t('forwardSelectValidTarget'))
       return
     }
 
     const validMessages = forwardableMessages
 
-    if (validMessages.length === 0) {
-      Alert.alert('转发失败', '存在不可转发的消息体')
+    if (validMessages.length === 0 && !comment.trim()) {
+      toast.alert(t('forwardFailedTitle'), t('forwardUnsupportedFormat'))
       setConfirmVisible(false)
       return
     }
@@ -434,54 +737,150 @@ const ForwardMessageScreen = observer(() => {
       )
 
       if (blockedMessages.length > 0) {
-        Alert.alert('转发失败', '存在超出合并限制的消息，无法合并转发')
+        toast.alert(t('forwardFailedTitle'), t('forwardMergedLimitExceeded'))
         setConfirmVisible(false)
         return
       }
     }
 
     try {
+      forwardConfirmLockRef.current = true
       setSubmitting(true)
       await ensureNetworkAvailable()
 
-      for (const target of confirmTargets) {
-        if (!conversationStore.getConversation(target.conversationId)) {
-          await conversationStore.createConversation(target.conversationId)
-        }
-
-        if (forwardMode === 'serial') {
-          await messageStore.forwardMessages(validMessages, target.conversationId, comment)
-          continue
-        }
-
-        if (forwardMode === 'merged') {
-          const payload = buildMergedForwardPayload(
-            validMessages,
-            typeof sourceTitle === 'string' ? sourceTitle : sourceConversation?.name || '聊天记录',
-            sourceConversationType,
-            sourceTargetId
-          )
-
-          await messageStore.sendMergedForwardMessage(target.conversationId, payload, comment)
-          continue
-        }
-
-        await messageStore.forwardMessage(validMessages[0], target.conversationId, comment)
-      }
+      const targetsToForward = confirmTargets.slice()
+      const messagesToForward = validMessages.slice()
+      const commentToForward = comment
+      const resolvedSourceTitle =
+        forwardMode === 'merged'
+          ? typeof sourcePayloadTitle === 'string'
+            ? sourcePayloadTitle
+            : getForwardPayloadSourceTitle(
+                sourceConversationType,
+                sourceTargetId,
+                sourceConversation?.name
+              ) || t('chatMergedForwardFooter')
+          : ''
 
       setConfirmVisible(false)
       setComment('')
       forwardStore.reset()
+      forwardStore.clearSourceMessages()
       setPendingTargetId(null)
+
+      if (forwardMode !== 'single' && sourceConversationId) {
+        forwardStore.markExitBatchSelection(sourceConversationId)
+      }
+
+      if (
+        sourceConversationId &&
+        targetsToForward.some((target) => target.conversationId === sourceConversationId)
+      ) {
+        forwardStore.markLatestAlignment(sourceConversationId)
+      }
+
+      await Promise.all(
+        targetsToForward.map((target) =>
+          messageStore.rememberRecentForwardConversation(target.conversationId)
+        )
+      )
+
       router.back()
+      ;(async () => {
+        await Promise.all(
+          targetsToForward.map(async (target) => {
+            const existingConversation =
+              imStoreV2Bridge.getConversation(target.conversationId) ||
+              conversationStore.getConversation(target.conversationId)
+
+            if (!existingConversation && !imStoreV2Bridge.preferCloudConversation) {
+              await conversationStore.createConversation(target.conversationId)
+            }
+
+            if (messagesToForward.length === 0) {
+              await messageStore.sendForwardComment(target.conversationId, commentToForward)
+              return
+            }
+
+            if (forwardMode === 'serial') {
+              await messageStore.forwardMessages(
+                messagesToForward,
+                target.conversationId,
+                commentToForward
+              )
+              return
+            }
+
+            if (forwardMode === 'merged') {
+              await messageStore.sendMergedForwardMessage(
+                target.conversationId,
+                messagesToForward,
+                sourceConversationId,
+                resolvedSourceTitle,
+                commentToForward
+              )
+              return
+            }
+
+            if (isCollectionSource) {
+              await messageStore.forwardCollectionMessage(
+                messagesToForward[0],
+                target.conversationId,
+                commentToForward
+              )
+              return
+            }
+
+            await messageStore.forwardMessage(
+              messagesToForward[0],
+              target.conversationId,
+              commentToForward
+            )
+          })
+        )
+      })().catch((error) => {
+        if (error instanceof Error && error.message === NETWORK_UNAVAILABLE_MESSAGE) {
+          toast.alert(t('forwardFailedTitle'), NETWORK_UNAVAILABLE_MESSAGE)
+          return
+        }
+
+        if (forwardMode === 'merged') {
+          toast.alert(t('forwardFailedTitle'))
+        }
+      })
     } catch (error) {
-      Alert.alert('转发失败', error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE)
+      setConfirmVisible(false)
+
+      if (error instanceof Error && error.message === NETWORK_UNAVAILABLE_MESSAGE) {
+        if (forwardMode !== 'single' && sourceConversationId) {
+          forwardStore.markExitBatchSelection(sourceConversationId)
+        }
+        toast.alert(t('forwardFailedTitle'), NETWORK_UNAVAILABLE_MESSAGE)
+        return
+      }
+
+      if (forwardMode !== 'single' && sourceConversationId) {
+        forwardStore.markExitBatchSelection(sourceConversationId)
+      }
+
+      router.back()
     } finally {
+      forwardConfirmLockRef.current = false
       setSubmitting(false)
     }
   }
 
+  const cancelForward = () => {
+    setConfirmVisible(false)
+    setPendingTargetId(null)
+  }
+
   const renderAvatar = (target: ForwardTarget, size = 52) => {
+    const label =
+      target.conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
+        ? target.title.slice(0, 1)
+        : getUIKitUserAvatarLabel({ account: target.targetId })
+
     if (target.avatar) {
       return (
         <Image
@@ -497,56 +896,276 @@ const ForwardMessageScreen = observer(() => {
         <ThemedText
           style={[styles.avatarFallbackText, size <= 36 && styles.avatarFallbackTextSmall]}
         >
-          {target.title.slice(0, 1).toUpperCase()}
+          {label.toUpperCase()}
         </ThemedText>
       </View>
     )
   }
 
-  const renderTargetRow = (target: ForwardTarget) => {
+  const renderRecentForwardTarget = (target: ForwardTarget) => {
     const selected =
       target.conversationId === pendingTargetId ||
-      forwardStore.selectedConversationIds.includes(target.conversationId)
+      selectedConversationIdSet.has(target.conversationId)
 
     return (
       <TouchableOpacity
-        key={target.conversationId}
-        style={[styles.row, selected && styles.rowSelected, !target.valid && styles.rowDisabled]}
+        key={`recent-forward-${target.conversationId}`}
+        style={[styles.recentItem, { width: recentForwardItemWidth }]}
         onPress={() => handleTargetPress(target)}
       >
-        <UIKitSelectionIndicator selected={selected} style={styles.rowIndicator} />
-        {renderAvatar(target, 54)}
-        <View style={styles.meta}>
-          <ThemedText numberOfLines={1} style={styles.title}>
-            {target.title}
-          </ThemedText>
-          <ThemedText numberOfLines={1} style={styles.subText}>
-            {target.subtitle}
-          </ThemedText>
-        </View>
+        <View>{renderAvatar(target, RECENT_FORWARD_AVATAR_SIZE)}</View>
+        <ThemedText numberOfLines={1} style={styles.recentLabel}>
+          {target.title}
+        </ThemedText>
+        {isMultiTargetMode && (
+          <View style={[styles.recentIndicator, selected && styles.recentIndicatorSelected]}>
+            {selected ? <ThemedText style={styles.recentIndicatorText}>✓</ThemedText> : null}
+          </View>
+        )}
       </TouchableOpacity>
     )
   }
 
+  const targetTabs = useMemo(
+    () =>
+      [
+        {
+          key: 'recentChats',
+          label: t('forwardSectionRecentChats'),
+          targets: displayedRecentConversationTargets,
+          emptyTitle: t('forwardNoConversations'),
+          emptyDescription: t('forwardNoConversationsDescription')
+        },
+        {
+          key: 'friends',
+          label: t('forwardSectionFriends'),
+          targets: displayedFriendTargets,
+          emptyTitle: t('commonNoFriends'),
+          emptyDescription: t('forwardNoFriendsDescription')
+        },
+        {
+          key: 'groups',
+          label: t('forwardSectionGroups'),
+          targets: displayedTeamTargets,
+          emptyTitle: t('forwardNoGroups'),
+          emptyDescription: t('forwardNoGroupsDescription')
+        }
+      ] as const,
+    [displayedFriendTargets, displayedRecentConversationTargets, displayedTeamTargets, t]
+  )
+  const activeTargetTabConfig =
+    targetTabs.find((tab) => tab.key === activeTargetTab) || targetTabs[0]
+  const renderTargetTabEmpty = () =>
+    normalizedKeyword ? (
+      <View style={styles.searchEmpty}>
+        <ThemedText style={styles.searchEmptyIcon}>⌕</ThemedText>
+        <ThemedText style={styles.searchEmptyText}>
+          {t('forwardSearchNoResultPrefix')}
+          <UIKitChatHighlightText text={keyword.trim()} keyword={keyword.trim()} />
+          {t('forwardSearchNoResultSuffix')}
+        </ThemedText>
+      </View>
+    ) : (
+      <View style={styles.emptyListWrap}>
+        <UIKitChatEmptyState
+          title={activeTargetTabConfig.emptyTitle}
+          description={activeTargetTabConfig.emptyDescription}
+        />
+      </View>
+    )
+  const renderTargetListItem = useCallback(
+    ({ item }: ListRenderItemInfo<ForwardTarget>) => {
+      const selected =
+        item.conversationId === pendingTargetId ||
+        selectedConversationIdSet.has(item.conversationId)
+      const isTeam = item.conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
+
+      return (
+        <TouchableOpacity
+          style={[styles.row, !item.valid && styles.rowDisabled]}
+          onPress={() => handleTargetPress(item)}
+        >
+          {isMultiTargetMode && (
+            <UIKitSelectionIndicator
+              selected={selected}
+              style={[styles.rowIndicator, selected && styles.rowIndicatorSelected]}
+              textStyle={styles.rowIndicatorText}
+            />
+          )}
+          {renderAvatar(item, 40)}
+          <View style={styles.meta}>
+            {isTeam ? (
+              <View style={styles.titleRow}>
+                <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.title}>
+                  {item.title}
+                </ThemedText>
+                <ThemedText style={styles.memberCountText}>({item.memberCount || 0})</ThemedText>
+              </View>
+            ) : (
+              <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.title}>
+                {item.title}
+              </ThemedText>
+            )}
+          </View>
+        </TouchableOpacity>
+      )
+    },
+    [handleTargetPress, isMultiTargetMode, pendingTargetId, selectedConversationIdSet]
+  )
+  const handleTargetListEndReached = useCallback(() => {
+    if (normalizedKeyword || activeTargetTab !== 'recentChats') {
+      return
+    }
+
+    prefetchMoreRecentConversationTargets()
+  }, [activeTargetTab, normalizedKeyword, prefetchMoreRecentConversationTargets])
+  const renderTargetTabPane = () => (
+    <FlatList
+      data={activeTargetTabConfig.targets}
+      keyExtractor={(item) => item.conversationId}
+      style={styles.targetTabPane}
+      contentContainerStyle={styles.content}
+      removeClippedSubviews
+      initialNumToRender={FORWARD_TARGET_INITIAL_RENDER_COUNT}
+      maxToRenderPerBatch={FORWARD_TARGET_BATCH_RENDER_COUNT}
+      windowSize={FORWARD_TARGET_WINDOW_SIZE}
+      updateCellsBatchingPeriod={8}
+      getItemLayout={(_, index) => ({
+        length: FORWARD_TARGET_ROW_HEIGHT,
+        offset: FORWARD_TARGET_ROW_HEIGHT * index,
+        index
+      })}
+      renderItem={renderTargetListItem}
+      ListEmptyComponent={renderTargetTabEmpty}
+      onEndReached={activeTargetTab === 'recentChats' ? handleTargetListEndReached : undefined}
+      onEndReachedThreshold={0.4}
+      extraData={{
+        pendingTargetId,
+        selectedConversationIdSet,
+        multiTargetMode: isMultiTargetMode
+      }}
+    />
+  )
+
+  const renderTargetTabs = () => (
+    <View style={styles.targetTabs}>
+      {targetTabs.map((tab) => {
+        const active = activeTargetTab === tab.key
+
+        return (
+          <TouchableOpacity
+            key={tab.key}
+            style={[styles.targetTab, active && styles.targetTabActive]}
+            onPress={() => setActiveTargetTab(tab.key)}
+          >
+            <ThemedText style={[styles.targetTabText, active && styles.targetTabTextActive]}>
+              {tab.label}
+            </ThemedText>
+            <View style={[styles.targetTabIndicator, active && styles.targetTabIndicatorActive]} />
+          </TouchableOpacity>
+        )
+      })}
+    </View>
+  )
+
   const confirmPreview = buildConfirmPreview(
     forwardMode,
     sourceMessages,
+    typeof sourceTitle === 'string' ? sourceTitle : sourceConversation?.name,
     sourceConversationType,
     sourceTargetId
   )
+  const resolvedConfirmPreview = useMemo(() => {
+    if (confirmPreview === '__FORWARD_EMPTY__') {
+      return t('forwardNoMessages')
+    }
+
+    try {
+      const previewPayload = JSON.parse(confirmPreview) as
+        | { type?: string; modeKey?: string; title?: string }
+        | undefined
+
+      if (previewPayload?.type === 'forward-preview' && previewPayload.modeKey) {
+        return t('forwardPreviewConversationRecord', {
+          mode: t(previewPayload.modeKey as never),
+          title: previewPayload.title || ''
+        })
+      }
+    } catch {
+      // Fall through to legacy parsing.
+    }
+
+    if (confirmPreview.startsWith('__FORWARD_PREVIEW__')) {
+      const parts = confirmPreview.split('__')
+      const modeKey = parts[2]
+      const previewTitle = parts.slice(3).join('__')
+
+      if (!modeKey) {
+        return confirmPreview
+      }
+
+      return t('forwardPreviewConversationRecord', {
+        mode: t(modeKey as never),
+        title: previewTitle
+      })
+    }
+
+    return confirmPreview
+  }, [confirmPreview, t])
+  const confirmPreviewParts = useMemo(() => {
+    if (confirmPreview === '__FORWARD_EMPTY__') {
+      return null
+    }
+
+    try {
+      const previewPayload = JSON.parse(confirmPreview) as
+        | { type?: string; modeKey?: string; title?: string }
+        | undefined
+
+      if (previewPayload?.type === 'forward-preview' && previewPayload.modeKey) {
+        return splitForwardPreviewTemplate(
+          t('forwardPreviewConversationRecord', {
+            mode: t(previewPayload.modeKey as never),
+            title: FORWARD_PREVIEW_TITLE_TOKEN
+          }),
+          previewPayload.title || ''
+        )
+      }
+    } catch {
+      // Fall through to legacy parsing.
+    }
+
+    if (confirmPreview.startsWith('__FORWARD_PREVIEW__')) {
+      const parts = confirmPreview.split('__')
+      const modeKey = parts[2]
+      const previewTitle = parts.slice(3).join('__')
+
+      if (modeKey) {
+        return splitForwardPreviewTemplate(
+          t('forwardPreviewConversationRecord', {
+            mode: t(modeKey as never),
+            title: FORWARD_PREVIEW_TITLE_TOKEN
+          }),
+          previewTitle
+        )
+      }
+    }
+
+    return null
+  }, [confirmPreview, t])
 
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen
         options={{
-          headerTitle: () => <UIKitChatHeaderTitle title="选择" />,
+          headerTitle: () => <UIKitChatHeaderTitle title={t('forwardHeaderSelect')} />,
           headerTitleAlign: 'center',
           headerShadowVisible: false,
           headerStyle: { backgroundColor: '#FFFFFF' },
           headerRight: () => (
             <TouchableOpacity style={styles.headerButton} onPress={openConfirmForSelectedTargets}>
               <ThemedText style={styles.headerButtonText}>
-                {forwardStore.multiTargetMode ? '确定' : '多选'}
+                {isMultiTargetMode ? t('actionConfirm') : t('forwardHeaderMultiSelect')}
               </ThemedText>
             </TouchableOpacity>
           )
@@ -557,44 +1176,45 @@ const ForwardMessageScreen = observer(() => {
         <UIKitChatSearchBar
           value={keyword}
           onChangeText={setKeyword}
-          placeholder="搜索好友"
+          placeholder={t('commonSearch')}
           returnKeyType="search"
         />
 
-        {forwardStore.multiTargetMode ? (
-          <TouchableOpacity
-            style={styles.selectedStrip}
-            onPress={() => router.push('/chat/forward-selected' as never)}
-          >
-            <View style={styles.selectedAvatarRow}>
-              {selectedTargets.slice(0, 4).map((target) => (
-                <View key={target.conversationId} style={styles.selectedAvatarItem}>
+        {isMultiTargetMode && selectedTargets.length > 0 ? (
+          <>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.selectedStrip}
+              contentContainerStyle={styles.selectedAvatarRow}
+            >
+              {selectedTargets.map((target) => (
+                <TouchableOpacity
+                  key={target.conversationId}
+                  style={styles.selectedAvatarItem}
+                  onPress={() => router.push('/chat/forward-selected' as never)}
+                >
                   {renderAvatar(target, 34)}
-                </View>
+                </TouchableOpacity>
               ))}
-            </View>
-            <ThemedText style={styles.selectedStripText}>
-              已选择 {forwardStore.selectedConversationIds.length} 个会话
-            </ThemedText>
-          </TouchableOpacity>
-        ) : null}
-      </View>
+            </ScrollView>
+            <View style={styles.selectedTabsGap} />
+          </>
+        ) : (
+          <View style={styles.selectedTabsGap} />
+        )}
 
-      <ScrollView contentContainerStyle={styles.content}>
-        {!normalizedKeyword &&
-        (recentForwardLoading ||
-          recentForwardLoadFailed ||
-          displayedRecentForwardTargets.length > 0) ? (
-          <View style={styles.section}>
-            <ThemedText style={styles.sectionTitle}>最近转发</ThemedText>
+        {shouldShowRecentForwardSection ? (
+          <View style={styles.recentForwardModule}>
+            <ThemedText style={styles.sectionTitle}>{t('forwardSectionRecent')}</ThemedText>
             {recentForwardLoading ? (
-              <View style={styles.loadingWrap}>
+              <View style={styles.recentLoadingWrap}>
                 <ActivityIndicator color="#337EFF" />
               </View>
             ) : recentForwardLoadFailed ? (
               <UIKitChatEmptyState
-                title="最近转发加载失败"
-                actionLabel="重试"
+                title={t('forwardRecentLoadFailedTitle')}
+                actionLabel={t('commonRetry')}
                 onActionPress={() => {
                   loadRecentForwardTargets().catch(() => undefined)
                 }}
@@ -602,90 +1222,103 @@ const ForwardMessageScreen = observer(() => {
             ) : (
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={styles.recentRow}>
-                  {displayedRecentForwardTargets.map((target) => (
-                    <TouchableOpacity
-                      key={`recent-forward-${target.conversationId}`}
-                      style={styles.recentItem}
-                      onPress={() => handleTargetPress(target)}
-                    >
-                      {renderAvatar(target, 58)}
-                      <ThemedText numberOfLines={1} style={styles.recentLabel}>
-                        {target.title}
-                      </ThemedText>
-                    </TouchableOpacity>
-                  ))}
+                  {displayedRecentForwardTargets.map(renderRecentForwardTarget)}
                 </View>
               </ScrollView>
             )}
           </View>
         ) : null}
 
-        <View style={styles.section}>
-          <ThemedText style={styles.sectionTitle}>最近聊天</ThemedText>
-          {displayedRecentConversationTargets.length > 0 ? (
-            displayedRecentConversationTargets.map(renderTargetRow)
-          ) : (
-            <UIKitChatEmptyState
-              title="暂无会话"
-              description="进入聊天后可从最近会话里快速转发。"
-            />
-          )}
-        </View>
+        {shouldShowRecentForwardSection ? <View style={styles.recentTabsGap} /> : null}
 
-        <View style={styles.section}>
-          <ThemedText style={styles.sectionTitle}>我的好友</ThemedText>
-          {displayedFriendTargets.length > 0 ? (
-            displayedFriendTargets.map(renderTargetRow)
-          ) : (
-            <UIKitChatEmptyState title="暂无好友" description="请先添加好友后再转发消息。" />
-          )}
-        </View>
+        {renderTargetTabs()}
+      </View>
 
-        <View style={styles.section}>
-          <ThemedText style={styles.sectionTitle}>我的群聊</ThemedText>
-          {displayedTeamTargets.length > 0 ? (
-            displayedTeamTargets.map(renderTargetRow)
-          ) : (
-            <UIKitChatEmptyState title="暂无群聊" description="加入群聊后可以把消息转发到这里。" />
-          )}
-        </View>
-      </ScrollView>
+      <View style={styles.targetTabPaneContainer}>{renderTargetTabPane()}</View>
 
       <Modal
         transparent
         visible={confirmVisible}
         animationType="fade"
-        onRequestClose={() => setConfirmVisible(false)}
+        onRequestClose={cancelForward}
       >
-        <Pressable style={styles.modalMask} onPress={() => setConfirmVisible(false)}>
+        <Pressable
+          style={[
+            styles.modalMask,
+            keyboardBottomInset > 0 && { paddingBottom: keyboardBottomInset }
+          ]}
+          onPress={cancelForward}
+        >
           <Pressable style={styles.modalCard} onPress={() => undefined}>
-            <ThemedText style={styles.modalTitle}>发送给</ThemedText>
-            <View style={styles.modalAvatarRow}>
-              {confirmTargets.map((target) => (
-                <View key={target.conversationId} style={styles.modalAvatarWrap}>
-                  {renderAvatar(target, 50)}
-                </View>
-              ))}
+            <ThemedText style={styles.modalTitle}>{t('forwardSendToTitle')}</ThemedText>
+            <View
+              style={[
+                styles.modalTargetPreview,
+                confirmTargets.length === 1 && styles.modalTargetPreviewSingle
+              ]}
+            >
+              {confirmTargets.length === 1
+                ? confirmTargets.map((target) => (
+                    <View key={target.conversationId} style={styles.modalSingleTargetRow}>
+                      {renderAvatar(target, 50)}
+                      <ThemedText
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                        style={styles.modalSingleTargetName}
+                      >
+                        {target.title}
+                      </ThemedText>
+                    </View>
+                  ))
+                : visibleConfirmTargets.map((target) => (
+                    <View key={target.conversationId} style={styles.modalAvatarOnlyWrap}>
+                      {renderAvatar(target, CONFIRM_MULTI_TARGET_AVATAR_SIZE)}
+                    </View>
+                  ))}
             </View>
             <View style={styles.previewBox}>
-              <ThemedText numberOfLines={2} style={styles.previewText}>
-                {confirmPreview}
-              </ThemedText>
+              {confirmPreviewParts ? (
+                <View style={styles.previewTextRow}>
+                  {!!confirmPreviewParts.prefix && (
+                    <ThemedText numberOfLines={1} style={styles.previewTextFixed}>
+                      {confirmPreviewParts.prefix}
+                    </ThemedText>
+                  )}
+                  <ThemedText
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    style={styles.previewTextTitle}
+                  >
+                    {confirmPreviewParts.title}
+                  </ThemedText>
+                  {!!confirmPreviewParts.suffix && (
+                    <ThemedText numberOfLines={1} style={styles.previewTextFixed}>
+                      {confirmPreviewParts.suffix}
+                    </ThemedText>
+                  )}
+                </View>
+              ) : (
+                <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.previewText}>
+                  {resolvedConfirmPreview}
+                </ThemedText>
+              )}
             </View>
             <TextInput
               style={styles.commentInput}
               value={comment}
-              onChangeText={setComment}
-              placeholder="留言"
+              onChangeText={(text) => setComment(text.replace(/[\r\n]+/g, ''))}
+              placeholder={t('forwardCommentPlaceholder')}
               placeholderTextColor="#B4BCC7"
+              multiline={false}
+              returnKeyType="done"
             />
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={styles.modalButton}
-                onPress={() => setConfirmVisible(false)}
+                onPress={cancelForward}
                 disabled={submitting}
               >
-                <ThemedText style={styles.modalCancelText}>取消</ThemedText>
+                <ThemedText style={styles.modalCancelText}>{t('actionCancel')}</ThemedText>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalButtonPrimary]}
@@ -695,7 +1328,7 @@ const ForwardMessageScreen = observer(() => {
                 {submitting ? (
                   <ActivityIndicator color="#337EFF" />
                 ) : (
-                  <ThemedText style={styles.modalConfirmText}>发送</ThemedText>
+                  <ThemedText style={styles.modalConfirmText}>{t('sendText' as never)}</ThemedText>
                 )}
               </TouchableOpacity>
             </View>
@@ -709,7 +1342,7 @@ const ForwardMessageScreen = observer(() => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F7FB'
+    backgroundColor: '#FFFFFF'
   },
   headerButton: {
     paddingHorizontal: 10,
@@ -723,78 +1356,178 @@ const styles = StyleSheet.create({
   },
   topArea: {
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 16,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 10,
     gap: 12
   },
-  selectedStrip: {
+  targetTabs: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12
+    marginHorizontal: -16,
+    backgroundColor: '#FFFFFF'
   },
+  targetTab: {
+    flex: 1,
+    minHeight: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6
+  },
+  targetTabActive: {
+    backgroundColor: '#FFFFFF'
+  },
+  targetTabText: {
+    color: '#667085',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '500',
+    textAlign: 'center'
+  },
+  targetTabTextActive: {
+    color: '#337EFF',
+    fontWeight: '700'
+  },
+  targetTabIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    width: '100%',
+    height: 3,
+    backgroundColor: 'transparent'
+  },
+  targetTabIndicatorActive: {
+    backgroundColor: '#337EFF'
+  },
+  selectedStrip: {},
   selectedAvatarRow: {
-    flexDirection: 'row'
+    flexDirection: 'row',
+    alignItems: 'center'
   },
   selectedAvatarItem: {
     marginRight: 8
   },
-  selectedStripText: {
-    color: '#6C7687',
-    fontSize: 14,
-    lineHeight: 20
+  selectedTabsGap: {
+    height: 8,
+    marginHorizontal: -16,
+    backgroundColor: '#F5F7FB'
+  },
+  recentForwardModule: {
+    marginHorizontal: -8,
+    paddingHorizontal: 8
+  },
+  targetTabPaneContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF'
+  },
+  targetTabPane: {
+    flex: 1
   },
   content: {
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 30
-  },
-  section: {
-    marginBottom: 20
+    paddingHorizontal: FORWARD_PAGE_HORIZONTAL_PADDING,
+    paddingTop: 12,
+    paddingBottom: 24,
+    backgroundColor: '#FFFFFF'
   },
   sectionTitle: {
-    marginBottom: 12,
+    marginBottom: 8,
     color: '#8E98A8',
-    fontSize: 16,
-    lineHeight: 22
+    fontSize: 14,
+    lineHeight: 20
   },
   loadingWrap: {
     paddingVertical: 32,
     alignItems: 'center'
   },
+  recentLoadingWrap: {
+    paddingVertical: 18,
+    alignItems: 'center'
+  },
   recentRow: {
     flexDirection: 'row',
-    gap: 18,
-    paddingVertical: 4
+    gap: RECENT_FORWARD_GAP,
+    paddingVertical: 2
   },
   recentItem: {
-    width: 72,
     alignItems: 'center',
-    gap: 8
+    gap: 6
   },
   recentLabel: {
     color: '#586171',
     fontSize: 12,
-    lineHeight: 17,
+    lineHeight: 16,
+    textAlign: 'center'
+  },
+  recentIndicator: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#C3CCD8',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  recentIndicatorSelected: {
+    backgroundColor: '#337EFF',
+    borderColor: '#337EFF'
+  },
+  recentIndicatorText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    lineHeight: 16,
+    fontWeight: '700',
+    transform: [{ translateY: -1 }]
+  },
+  recentTabsGap: {
+    height: 8,
+    marginHorizontal: -16,
+    backgroundColor: '#F5F7FB'
+  },
+  searchEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 64
+  },
+  emptyListWrap: {
+    paddingVertical: 64
+  },
+  searchEmptyIcon: {
+    color: '#C5CDD8',
+    fontSize: 46,
+    lineHeight: 54,
+    marginBottom: 12
+  },
+  searchEmptyText: {
+    color: '#667085',
+    fontSize: 15,
+    lineHeight: 22,
     textAlign: 'center'
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 24,
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-    marginBottom: 12
-  },
-  rowSelected: {
-    backgroundColor: '#F2F7FF'
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 8
   },
   rowDisabled: {
     opacity: 0.5
   },
   rowIndicator: {
-    marginRight: 14
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    marginRight: 12
+  },
+  rowIndicatorSelected: {
+    width: 24,
+    height: 24,
+    borderRadius: 12
+  },
+  rowIndicatorText: {
+    transform: [{ translateY: -1 }]
   },
   avatarFallback: {
     backgroundColor: '#337EFF',
@@ -811,27 +1544,37 @@ const styles = StyleSheet.create({
   },
   meta: {
     flex: 1,
-    marginLeft: 14,
-    gap: 4
+    marginLeft: 12,
+    minWidth: 0
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0
   },
   title: {
+    flexShrink: 1,
     color: '#2F3642',
-    fontSize: 18,
-    lineHeight: 25,
-    fontWeight: '700'
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '600'
   },
-  subText: {
-    color: '#A0A9B5',
-    fontSize: 13,
-    lineHeight: 18
+  memberCountText: {
+    flexShrink: 0,
+    color: '#2F3642',
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '600'
   },
   modalMask: {
     flex: 1,
     backgroundColor: 'rgba(10, 16, 24, 0.42)',
     justifyContent: 'center',
-    paddingHorizontal: 20
+    paddingHorizontal: 20,
+    paddingVertical: 24
   },
   modalCard: {
+    maxHeight: '100%',
     borderRadius: 24,
     backgroundColor: '#FFFFFF',
     overflow: 'hidden'
@@ -844,16 +1587,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 22
   },
-  modalAvatarRow: {
+  modalTargetPreview: {
     flexDirection: 'row',
+    alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: 8,
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 14
   },
-  modalAvatarWrap: {
-    marginRight: 2
+  modalTargetPreviewSingle: {
+    flexWrap: 'nowrap'
+  },
+  modalSingleTargetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0
+  },
+  modalSingleTargetName: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 12,
+    color: '#2E3541',
+    fontSize: 17,
+    lineHeight: 24,
+    fontWeight: '500'
+  },
+  modalAvatarOnlyWrap: {
+    width: CONFIRM_MULTI_TARGET_AVATAR_SIZE,
+    height: CONFIRM_MULTI_TARGET_AVATAR_SIZE
   },
   previewBox: {
     marginHorizontal: 20,
@@ -862,7 +1625,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 18
   },
+  previewTextRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0
+  },
   previewText: {
+    color: '#4B5567',
+    fontSize: 15,
+    lineHeight: 22
+  },
+  previewTextFixed: {
+    flexShrink: 0,
+    color: '#4B5567',
+    fontSize: 15,
+    lineHeight: 22
+  },
+  previewTextTitle: {
+    flexShrink: 1,
+    minWidth: 0,
     color: '#4B5567',
     fontSize: 15,
     lineHeight: 22

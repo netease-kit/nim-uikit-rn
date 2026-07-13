@@ -23,7 +23,10 @@ const MessageNotification: React.FC<MessageNotificationProps> = observer(({ msg 
   const [notificationContent, setNotificationContent] = useState('')
 
   // 获取群组ID
-  const teamId = msg.conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM ? msg.receiverId : ''
+  const teamId =
+    msg.conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
+      ? msg.receiverId
+      : ''
 
   // 计算通知内容
   useEffect(() => {
@@ -31,7 +34,8 @@ const MessageNotification: React.FC<MessageNotificationProps> = observer(({ msg 
       const attachment = msg.attachment as V2NIMMessageNotificationAttachment
 
       switch (attachment?.type) {
-        case V2NIMConst.V2NIMMessageNotificationType.V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_UPDATE_TINFO: {
+        case V2NIMConst.V2NIMMessageNotificationType
+          .V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_UPDATE_TINFO: {
           const team = (attachment?.updatedTeamInfo || {}) as V2NIMTeam
           const content: string[] = []
 
@@ -47,21 +51,29 @@ const MessageNotification: React.FC<MessageNotificationProps> = observer(({ msg 
           if (team.inviteMode !== undefined) {
             content.push(
               `${t('updateTeamInviteMode')}"${
-                team.inviteMode === V2NIMConst.V2NIMTeamInviteMode.V2NIM_TEAM_INVITE_MODE_ALL ? t('teamAll') : t('teamOwnerAndManagerText')
+                team.inviteMode === V2NIMConst.V2NIMTeamInviteMode.V2NIM_TEAM_INVITE_MODE_ALL
+                  ? t('teamAll')
+                  : t('teamOwnerAndManagerText')
               }"`
             )
           }
           if (team.updateInfoMode !== undefined) {
             content.push(
               `${t('updateTeamUpdateTeamMode')}"${
-                team.updateInfoMode === V2NIMConst.V2NIMTeamUpdateInfoMode.V2NIM_TEAM_UPDATE_INFO_MODE_ALL ? t('teamAll') : t('teamOwnerAndManagerText')
+                team.updateInfoMode ===
+                V2NIMConst.V2NIMTeamUpdateInfoMode.V2NIM_TEAM_UPDATE_INFO_MODE_ALL
+                  ? t('teamAll')
+                  : t('teamOwnerAndManagerText')
               }"`
             )
           }
           if (team.chatBannedMode !== undefined) {
             content.push(
               `${t('updateTeamMute')}${
-                team.chatBannedMode === V2NIMConst.V2NIMTeamChatBannedMode.V2NIM_TEAM_CHAT_BANNED_MODE_UNBAN ? t('closeText') : t('openText')
+                team.chatBannedMode ===
+                V2NIMConst.V2NIMTeamChatBannedMode.V2NIM_TEAM_CHAT_BANNED_MODE_UNBAN
+                  ? t('closeText')
+                  : t('openText')
               }`
             )
           }
@@ -73,7 +85,9 @@ const MessageNotification: React.FC<MessageNotificationProps> = observer(({ msg 
               // 解析失败，忽略
             }
             if (ext[ALLOW_AT] !== undefined) {
-              content.push(`${t('updateAllowAt')}"${ext[ALLOW_AT] === 'manager' ? t('teamOwnerAndManagerText') : t('teamAll')}"`)
+              content.push(
+                `${t('updateAllowAt')}"${ext[ALLOW_AT] === 'manager' ? t('teamOwnerAndManagerText') : t('teamAll')}"`
+              )
             }
           }
 
@@ -84,8 +98,10 @@ const MessageNotification: React.FC<MessageNotificationProps> = observer(({ msg 
               })} ${content.join('、')}`
             : ''
         }
-        case V2NIMConst.V2NIMMessageNotificationType.V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_APPLY_PASS:
-        case V2NIMConst.V2NIMMessageNotificationType.V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_INVITE_ACCEPT: {
+        case V2NIMConst.V2NIMMessageNotificationType
+          .V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_APPLY_PASS:
+        case V2NIMConst.V2NIMMessageNotificationType
+          .V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_INVITE_ACCEPT: {
           return `${store.uiStore.getAppellation({
             account: msg.senderId,
             teamId
@@ -131,7 +147,8 @@ const MessageNotification: React.FC<MessageNotificationProps> = observer(({ msg 
 
           return `${nicks} ${t('beRemoveTeamText')}`
         }
-        case V2NIMConst.V2NIMMessageNotificationType.V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_ADD_MANAGER: {
+        case V2NIMConst.V2NIMMessageNotificationType
+          .V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_ADD_MANAGER: {
           const accounts: string[] = attachment?.targetIds || []
 
           // 获取用户信息
@@ -151,7 +168,8 @@ const MessageNotification: React.FC<MessageNotificationProps> = observer(({ msg 
 
           return `${nicks} ${t('beAddTeamManagersText')}`
         }
-        case V2NIMConst.V2NIMMessageNotificationType.V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_REMOVE_MANAGER: {
+        case V2NIMConst.V2NIMMessageNotificationType
+          .V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_REMOVE_MANAGER: {
           const accounts: string[] = attachment?.targetIds || []
 
           // 获取用户信息
@@ -177,7 +195,8 @@ const MessageNotification: React.FC<MessageNotificationProps> = observer(({ msg 
             teamId
           })} ${t('leaveTeamText')}`
         }
-        case V2NIMConst.V2NIMMessageNotificationType.V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_OWNER_TRANSFER: {
+        case V2NIMConst.V2NIMMessageNotificationType
+          .V2NIM_MESSAGE_NOTIFICATION_TYPE_TEAM_OWNER_TRANSFER: {
           return `${store.uiStore.getAppellation({
             account: (attachment?.targetIds || [])[0],
             teamId

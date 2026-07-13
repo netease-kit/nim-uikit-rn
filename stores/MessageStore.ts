@@ -1,27 +1,52 @@
+import CryptoJS from 'crypto-js'
+import * as FileSystem from 'expo-file-system/legacy'
 import { makeAutoObservable, runInAction } from 'mobx'
+import { Platform } from 'react-native'
 
 import { NIMConfig } from '@/constants/NIMConfig'
-import { MERGED_FORWARD_SUBTYPE, MergedForwardPayload } from '@/utils/messageForward'
+import { translateCurrentApp } from '@/utils/app-language'
+import { normalizeDisplayErrorMessage } from '@/utils/error-message'
 import {
+  buildMentionExtension,
+  getMentionPushInfo,
+  MentionDraft,
+  parseMentionExtension
+} from '@/utils/mention'
+import {
+  getForwardPreview,
+  MERGED_FORWARD_CUSTOM_TYPE,
+  MultiForwardAbstract,
+  parseStandardMergedForwardData
+} from '@/utils/messageForward'
+import {
+  V2NIMAIModelRoleType,
   V2NIMClientAntispamOperateType,
+  V2NIMConversationType,
   V2NIMMessage,
+  V2NIMMessageAIConfigParams,
   V2NIMMessageAudioAttachment,
   V2NIMMessageCustomAttachment,
   V2NIMMessageFileAttachment,
   V2NIMMessageImageAttachment,
+  V2NIMMessageLocationAttachment,
   V2NIMMessagePin,
   V2NIMMessagePinNotification,
   V2NIMMessagePinState,
+  V2NIMMessageRefer,
   V2NIMMessageRevokeNotification,
   V2NIMMessageSendingState,
   V2NIMMessageType,
   V2NIMP2PMessageReadReceipt,
+  V2NIMSendMessageParams,
   V2NIMTeamMessageReadReceipt,
   V2NIMTeamMessageReadReceiptDetail
 } from '@/utils/nim-sdk'
+import { buildPushPayload } from '@/utils/offline-push'
 import { storage } from '@/utils/storage'
+import { logIOSVoiceDebug } from '@/utils/voice-debug-log'
 
 import { conversationStore } from './ConversationStore'
+import { imStoreV2Bridge } from './ImStoreV2Bridge'
 import { nimStore } from './NIMStore'
 import { preferenceStore } from './PreferenceStore'
 
@@ -31,6 +56,7 @@ type MessagesItem = {
   loading: boolean
   loadingMore: boolean
   hasMore: boolean
+  historyAnchor: V2NIMMessage | null
 }
 
 const DEFAULT_MESSAGES_ITEM: MessagesItem = {
@@ -38,7 +64,192 @@ const DEFAULT_MESSAGES_ITEM: MessagesItem = {
   isSync: false,
   loading: false,
   loadingMore: false,
-  hasMore: true
+  hasMore: true,
+  historyAnchor: null
+}
+
+const SUCCESS_MESSAGE_STATUS_CODE = 200
+const BLACKLIST_SEND_ERROR_CODE = 102426
+const BLACKLIST_SEND_TIP = () => translateCurrentApp('messageStoreBlacklistedTip' as never)
+const FRIEND_DELETED_SEND_ERROR_CODE = 104404
+const AI_MESSAGE_LIMIT = 30
+const FRIEND_DELETED_SEND_TIP = () => translateCurrentApp('messageStoreFriendDeletedTip' as never)
+const DELETE_MESSAGES_CHUNK_SIZE = 50
+const NATIVE_HISTORY_PAGE_SIZE = 100
+const TEAM_READ_RECEIPT_QUERY_MAX_BATCH_SIZE = 20
+const REVOKE_LOCAL_MESSAGE = 'revokeLocalMessage'
+const REVOKE_LOCAL_MESSAGE_CONTENT = 'revokeLocalMessageContent'
+const REVOKE_LOCAL_MESSAGE_CONTENT_ANDROID = 'revokeMessageContent'
+const REVOKE_LOCAL_MESSAGE_TIME = 'revokeLocalMessageTime'
+const LAST_MESSAGE_STATE_REVOKE = 1
+const REEDIT_TIME_LIMIT_MS = 2 * 60 * 1000
+const ANTISPAM_LABEL_KEY_MAP: Record<string, string> = {
+  100: 'commonAntispamPornography',
+  200: 'commonAntispamAdvertising',
+  260: 'commonAntispamAdvertisingLaw',
+  300: 'commonAntispamViolence',
+  400: 'commonAntispamProhibited',
+  500: 'commonAntispamPolitics',
+  600: 'commonAntispamAbuse',
+  700: 'commonAntispamSpam',
+  900: 'commonAntispamOther',
+  1000: 'commonAntispamValue',
+  1100: 'commonAntispamValue'
+}
+
+type TextMessageOptions = {
+  mentions?: MentionDraft
+  serverExtension?: string
+}
+
+type SendMessageResult = {
+  message: V2NIMMessage
+  antispamResult?: string
+  callbackExtension?: string
+}
+
+type PerformSendOptions = {
+  videoUploadPreview?: string
+  debugTraceId?: string
+}
+
+type ReadReceiptSendResult = {
+  sent: boolean
+  incomingCount: number
+  readableCount: number
+}
+
+type MessageDeleteRefer = {
+  conversationId: string
+  messageClientId?: string
+  messageServerId?: string
+}
+
+type MessageReplyRefer = Partial<V2NIMMessageRefer>
+
+function getVoiceStoreErrorCode(error: unknown) {
+  if (!error || typeof error !== 'object') {
+    return undefined
+  }
+
+  const candidate = error as {
+    code?: unknown
+    errCode?: unknown
+    errorCode?: unknown
+  }
+
+  return candidate.errorCode ?? candidate.errCode ?? candidate.code
+}
+
+function getVoiceStoreErrorDetail(error: unknown) {
+  if (!error || typeof error !== 'object') {
+    return ''
+  }
+
+  const candidate = error as {
+    detail?: unknown
+    reason?: unknown
+    message?: unknown
+  }
+
+  const parts = [candidate.message, candidate.reason, candidate.detail]
+    .map((value) => {
+      if (typeof value === 'string') {
+        return value
+      }
+
+      if (value && typeof value === 'object') {
+        try {
+          return JSON.stringify(value)
+        } catch {
+          return String(value)
+        }
+      }
+
+      return ''
+    })
+    .filter(Boolean)
+
+  return parts.join(' ')
+}
+
+function isTransientAndroidAudioUploadError(error: unknown) {
+  if (Platform.OS !== 'android') {
+    return false
+  }
+
+  const code = getVoiceStoreErrorCode(error)
+  if (code !== 194006) {
+    return false
+  }
+
+  const detail = getVoiceStoreErrorDetail(error).toLowerCase()
+  return detail.includes('stream closed') && detail.includes('status: 0')
+}
+
+function createSendFailureError(message: V2NIMMessage, result?: SendMessageResult) {
+  const errorCode = message.messageStatus?.errorCode
+  const hasFailureErrorCode = isSendFailureErrorCode(errorCode)
+  const errorMessage =
+    result?.callbackExtension?.trim() ||
+    message.callbackExtension?.trim() ||
+    message.text?.trim() ||
+    (hasFailureErrorCode ? String(errorCode) : '')
+  const error = new Error(errorMessage || translateCurrentApp('commonSendFailed'))
+
+  if (hasFailureErrorCode) {
+    ;(error as Error & { errorCode?: number; code?: number }).errorCode = errorCode
+    ;(error as Error & { errorCode?: number; code?: number }).code = errorCode
+  }
+
+  return error
+}
+
+function isSendFailureErrorCode(errorCode: unknown) {
+  return typeof errorCode === 'number' && errorCode !== SUCCESS_MESSAGE_STATUS_CODE
+}
+
+function createAntispamSendFailureError(reason: string, antispamResult?: string) {
+  const error = new Error(reason)
+  ;(error as Error & { antispamResult?: string }).antispamResult = antispamResult
+
+  return error
+}
+
+function hasSendFailureResult(message: V2NIMMessage) {
+  return (
+    message.sendingState === V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_FAILED ||
+    isSendFailureErrorCode(message.messageStatus?.errorCode)
+  )
+}
+
+function getAudioMessageDebugPayload(message?: V2NIMMessage) {
+  const attachment = message?.attachment as
+    | (V2NIMMessageAudioAttachment & {
+        ext?: unknown
+        size?: unknown
+        raw?: unknown
+      })
+    | undefined
+
+  return {
+    messageClientId: message?.messageClientId,
+    messageServerId: message?.messageServerId,
+    conversationId: message?.conversationId,
+    conversationType: message?.conversationType,
+    senderId: message?.senderId,
+    receiverId: message?.receiverId,
+    createTime: message?.createTime,
+    sendingState: message?.sendingState,
+    messageStatus: message?.messageStatus,
+    attachmentDuration: attachment?.duration,
+    attachmentName: attachment?.name,
+    attachmentPath: attachment?.path,
+    attachmentUrl: attachment?.url,
+    attachmentExt: attachment?.ext,
+    attachmentSize: attachment?.size,
+    attachmentRaw: attachment?.raw
+  }
 }
 
 class MessageStore {
@@ -47,17 +258,85 @@ class MessageStore {
   p2pReceiptMap: Record<string, V2NIMP2PMessageReadReceipt> = {}
   teamReceiptMap: Record<string, Record<string, V2NIMTeamMessageReadReceipt>> = {}
   revokedMessageMap: Record<string, Record<string, string>> = {}
+  revokedMessageTimeMap: Record<string, Record<string, number>> = {}
   pinnedMessageMap: Record<string, Record<string, V2NIMMessagePin>> = {}
   antispamMessageMap: Record<string, Record<string, string>> = {}
+  sentReadReceiptMap: Record<string, Record<string, boolean>> = {}
+  attachmentUploadProgressMap: Record<string, Record<string, number>> = {}
+  videoUploadPreviewMap: Record<string, Record<string, string>> = {}
+  resendingMessageMap: Record<string, boolean> = {}
+  replySourceMessageMap: Record<string, Record<string, V2NIMMessage>> = {}
   recentForwardConversationIds: string[] = []
   recentForwardAccountId: string | null = null
+  private pinnedMessageLoadPromiseByConversationId = new Map<string, Promise<V2NIMMessage[]>>()
+  private replySourceHydrationPromiseByKey = new Map<string, Promise<V2NIMMessage[]>>()
 
   constructor() {
     makeAutoObservable(this, {}, { autoBind: true })
   }
 
+  resetState() {
+    runInAction(() => {
+      this.messagesMap = {}
+      this.activeConversationId = null
+      this.p2pReceiptMap = {}
+      this.teamReceiptMap = {}
+      this.revokedMessageMap = {}
+      this.revokedMessageTimeMap = {}
+      this.pinnedMessageMap = {}
+      this.antispamMessageMap = {}
+      this.sentReadReceiptMap = {}
+      this.attachmentUploadProgressMap = {}
+      this.videoUploadPreviewMap = {}
+      this.resendingMessageMap = {}
+      this.replySourceMessageMap = {}
+      this.recentForwardConversationIds = []
+      this.recentForwardAccountId = null
+    })
+    this.pinnedMessageLoadPromiseByConversationId.clear()
+    this.replySourceHydrationPromiseByKey.clear()
+  }
+
   private getForwardHistoryStorageKey(accountId: string) {
     return `${NIMConfig.storageKeys.forwardHistory}.${accountId}`
+  }
+
+  private chunkMessages<T>(items: T[], size: number) {
+    const chunks: T[][] = []
+    for (let index = 0; index < items.length; index += size) {
+      chunks.push(items.slice(index, index + size))
+    }
+    return chunks
+  }
+
+  private getRefreshableOutgoingTeamMessages(messages: V2NIMMessage[]) {
+    const accountId = nimStore.getLoginUser()
+
+    if (!accountId) {
+      return []
+    }
+
+    return messages.filter(
+      (message) =>
+        message.conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM &&
+        message.senderId === accountId &&
+        message.sendingState === V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED
+    )
+  }
+
+  private async refreshHistoryBatchTeamReadReceipts(messages: V2NIMMessage[]) {
+    const outgoingMessages = this.getRefreshableOutgoingTeamMessages(messages)
+    const deduplicatedMessages = Array.from(
+      new Map(
+        outgoingMessages.map((message) => [this.getReadReceiptKey(message), message] as const)
+      ).values()
+    )
+
+    if (deduplicatedMessages.length === 0) {
+      return []
+    }
+
+    return this.refreshTeamReadReceipts(deduplicatedMessages)
   }
 
   private async ensureRecentForwardHistory() {
@@ -110,6 +389,10 @@ class MessageStore {
     await this.persistRecentForwardHistory()
   }
 
+  async rememberRecentForwardConversation(conversationId: string) {
+    await this.rememberForwardConversation(conversationId)
+  }
+
   private ensureConversationState(conversationId: string) {
     if (!this.messagesMap[conversationId]) {
       this.messagesMap[conversationId] = {
@@ -125,6 +408,309 @@ class MessageStore {
     return message.messageClientId || message.messageServerId
   }
 
+  private getMessageKeyCandidates(
+    message: Pick<V2NIMMessage, 'messageClientId' | 'messageServerId'>
+  ) {
+    return this.getMessageReferKeys(message)
+  }
+
+  private getMessageKeyCandidatesWithFallback(message: V2NIMMessage) {
+    return Array.from(
+      new Set([
+        ...this.getMessageKeyCandidates(message),
+        `${message.senderId || ''}:${message.receiverId || ''}:${message.createTime || 0}`
+      ])
+    ).filter(Boolean)
+  }
+
+  private pickOlderHistoryAnchor(
+    currentAnchor: V2NIMMessage | null,
+    candidateAnchor: V2NIMMessage | null
+  ) {
+    if (!candidateAnchor) {
+      return currentAnchor
+    }
+
+    if (!currentAnchor) {
+      return candidateAnchor
+    }
+
+    if (candidateAnchor.createTime < currentAnchor.createTime) {
+      return candidateAnchor
+    }
+
+    return currentAnchor
+  }
+
+  private getMessageReferKeys(
+    refer?: Partial<Pick<V2NIMMessage, 'messageClientId' | 'messageServerId'>>
+  ) {
+    return Array.from(
+      new Set(
+        [refer?.messageClientId, refer?.messageServerId].filter((key): key is string => !!key)
+      )
+    )
+  }
+
+  private getMessageOperationKey(conversationId: string, messageKey: string) {
+    return `${conversationId}:${messageKey}`
+  }
+
+  private isMessageResending(conversationId: string, messageKey: string) {
+    return !!this.resendingMessageMap[this.getMessageOperationKey(conversationId, messageKey)]
+  }
+
+  private setMessageResending(conversationId: string, messageKey: string, active: boolean) {
+    const operationKey = this.getMessageOperationKey(conversationId, messageKey)
+
+    runInAction(() => {
+      if (active) {
+        this.resendingMessageMap[operationKey] = true
+        return
+      }
+
+      delete this.resendingMessageMap[operationKey]
+    })
+  }
+
+  private parseJsonObject(value?: string | null) {
+    if (!value) {
+      return {}
+    }
+
+    try {
+      const parsed = JSON.parse(value)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {}
+    } catch {
+      return {}
+    }
+  }
+
+  private normalizeRevokeTime(value: unknown) {
+    const timestamp = typeof value === 'number' ? value : Number(value)
+
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+      return null
+    }
+
+    return timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp
+  }
+
+  private getRevokeExtension(notification: V2NIMMessageRevokeNotification) {
+    return this.parseJsonObject(notification.serverExtension)
+  }
+
+  private getMessageExtension(message: V2NIMMessage) {
+    const localExtension = this.parseJsonObject(
+      (message as V2NIMMessage & { localExtension?: string | null }).localExtension
+    )
+    const serverExtension = this.parseJsonObject(message.serverExtension)
+
+    return {
+      ...serverExtension,
+      ...localExtension
+    }
+  }
+
+  private getRevokeContentFromExtension(extension: Record<string, unknown>) {
+    const content =
+      extension[REVOKE_LOCAL_MESSAGE_CONTENT] ?? extension[REVOKE_LOCAL_MESSAGE_CONTENT_ANDROID]
+
+    return typeof content === 'string' ? content : ''
+  }
+
+  private getRevokedTextForMessage(message: V2NIMMessage) {
+    return message.senderId === nimStore.getLoginUser()
+      ? translateCurrentApp('commonRecallByYou')
+      : translateCurrentApp('commonRecalledMessage')
+  }
+
+  private ensureRevokeMaps(conversationId: string) {
+    if (!this.revokedMessageMap[conversationId]) {
+      this.revokedMessageMap[conversationId] = {}
+    }
+    if (!this.revokedMessageTimeMap[conversationId]) {
+      this.revokedMessageTimeMap[conversationId] = {}
+    }
+  }
+
+  private hydrateRevokeStateFromMessage(message: V2NIMMessage) {
+    const extension = this.getMessageExtension(message)
+
+    if (extension[REVOKE_LOCAL_MESSAGE] !== true) {
+      return message
+    }
+
+    const messageKeys = this.getMessageKeyCandidates(message)
+
+    if (messageKeys.length === 0) {
+      return message
+    }
+
+    const conversationId = message.conversationId
+    this.ensureRevokeMaps(conversationId)
+
+    const revokeTime =
+      this.normalizeRevokeTime(extension[REVOKE_LOCAL_MESSAGE_TIME]) || message.createTime
+    const revokedText = this.getRevokedTextForMessage(message)
+
+    messageKeys.forEach((messageKey) => {
+      this.revokedMessageMap[conversationId][messageKey] = revokedText
+      this.revokedMessageTimeMap[conversationId][messageKey] = revokeTime
+    })
+
+    const revokedContent = this.getRevokeContentFromExtension(extension)
+
+    if (
+      revokedContent &&
+      message.senderId === nimStore.getLoginUser() &&
+      message.messageType !== V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT
+    ) {
+      return {
+        ...message,
+        messageType: V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT,
+        text: revokedContent
+      }
+    }
+
+    return message
+  }
+
+  private getRevokeTimeFromNotification(notification: V2NIMMessageRevokeNotification) {
+    const extension = this.getRevokeExtension(notification)
+    return (
+      this.normalizeRevokeTime(extension[REVOKE_LOCAL_MESSAGE_TIME]) ||
+      this.normalizeRevokeTime(
+        (notification as V2NIMMessageRevokeNotification & { createTime?: number }).createTime
+      ) ||
+      Date.now()
+    )
+  }
+
+  private buildRevokeServerExtension(message: V2NIMMessage, revokeTime: number) {
+    const extension = this.parseJsonObject(message.serverExtension)
+
+    extension[REVOKE_LOCAL_MESSAGE] = true
+    extension[REVOKE_LOCAL_MESSAGE_TIME] = revokeTime / 1000
+
+    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT && message.text) {
+      extension[REVOKE_LOCAL_MESSAGE_CONTENT] = message.text
+    }
+
+    return JSON.stringify(extension)
+  }
+
+  private getReadReceiptKey(message: V2NIMMessage) {
+    return this.getMessageKeyCandidatesWithFallback(message)[0]
+  }
+
+  private isReadReceiptSent(message: V2NIMMessage) {
+    const sentMap = this.sentReadReceiptMap[message.conversationId]
+
+    return (
+      !!sentMap && this.getMessageKeyCandidatesWithFallback(message).some((key) => sentMap[key])
+    )
+  }
+
+  private markReadReceiptSent(messages: V2NIMMessage[]) {
+    runInAction(() => {
+      messages.forEach((message) => {
+        if (!this.sentReadReceiptMap[message.conversationId]) {
+          this.sentReadReceiptMap[message.conversationId] = {}
+        }
+
+        this.getMessageKeyCandidatesWithFallback(message).forEach((key) => {
+          this.sentReadReceiptMap[message.conversationId][key] = true
+        })
+      })
+    })
+  }
+
+  private isRevokedRefer(
+    conversationId: string,
+    refer?: Partial<Pick<V2NIMMessage, 'messageClientId' | 'messageServerId'>>
+  ) {
+    const revokedMap = this.revokedMessageMap[conversationId]
+
+    if (!revokedMap || !refer) {
+      return false
+    }
+
+    return this.getMessageReferKeys(refer).some((key) => !!revokedMap[key])
+  }
+
+  private getReadableIncomingMessages(conversationId: string, messages: V2NIMMessage[]) {
+    const accountId = nimStore.getLoginUser()
+
+    if (!accountId) {
+      return []
+    }
+
+    return messages.filter(
+      (message) =>
+        message.conversationId === conversationId &&
+        !!message.senderId &&
+        message.senderId !== accountId &&
+        message.messageType !== V2NIMMessageType.V2NIM_MESSAGE_TYPE_NOTIFICATION &&
+        message.messageType !== V2NIMMessageType.V2NIM_MESSAGE_TYPE_TIPS &&
+        !this.isReadReceiptSent(message)
+    )
+  }
+
+  private getTeamReceiptMessages(messages: V2NIMMessage[]) {
+    return messages.filter(
+      (message) =>
+        message.conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM &&
+        !!this.getMessageKey(message) &&
+        message.messageType !== V2NIMMessageType.V2NIM_MESSAGE_TYPE_NOTIFICATION &&
+        message.messageType !== V2NIMMessageType.V2NIM_MESSAGE_TYPE_TIPS
+    )
+  }
+
+  private async sendReadReceiptsForMessages(conversationId: string, messages: V2NIMMessage[]) {
+    const incomingCount = messages.filter(
+      (message) =>
+        message.conversationId === conversationId && message.senderId !== nimStore.getLoginUser()
+    ).length
+    const incomingMessages = this.getReadableIncomingMessages(conversationId, messages)
+    const result: ReadReceiptSendResult = {
+      sent: false,
+      incomingCount,
+      readableCount: incomingMessages.length
+    }
+
+    if (!incomingMessages.length) {
+      return result
+    }
+
+    const nim = nimStore.nim!
+    const latestIncoming = incomingMessages[incomingMessages.length - 1]
+
+    if (latestIncoming.conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P) {
+      await nim.V2NIMMessageService.sendP2PMessageReceipt(latestIncoming)
+      this.markReadReceiptSent([latestIncoming])
+      return {
+        ...result,
+        sent: true
+      }
+    }
+
+    const teamMessages = this.getTeamReceiptMessages(incomingMessages).slice(-50)
+
+    if (teamMessages.length > 0) {
+      await nim.V2NIMMessageService.sendTeamMessageReceipts(teamMessages)
+      this.markReadReceiptSent(teamMessages)
+      return {
+        ...result,
+        sent: true
+      }
+    }
+
+    return result
+  }
+
   private getMessageByRefer(
     conversationId: string,
     refer?: Partial<Pick<V2NIMMessage, 'messageClientId' | 'messageServerId'>>
@@ -138,7 +724,14 @@ class MessageStore {
         (message) =>
           (!!refer.messageClientId && message.messageClientId === refer.messageClientId) ||
           (!!refer.messageServerId && message.messageServerId === refer.messageServerId)
-      ) || null
+      ) ||
+      (refer.messageClientId
+        ? this.replySourceMessageMap[conversationId]?.[refer.messageClientId]
+        : null) ||
+      (refer.messageServerId
+        ? this.replySourceMessageMap[conversationId]?.[refer.messageServerId]
+        : null) ||
+      null
     )
   }
 
@@ -154,16 +747,189 @@ class MessageStore {
     }
   }
 
+  private refreshMessageReferenceByRefer(
+    conversationId: string,
+    refer?: Partial<Pick<V2NIMMessage, 'messageClientId' | 'messageServerId'>>
+  ) {
+    const current = this.messagesMap[conversationId]
+
+    if (!current || !refer) {
+      return
+    }
+
+    let hasChanged = false
+    const nextList = current.list.map((message) => {
+      const matched =
+        (!!refer.messageClientId && message.messageClientId === refer.messageClientId) ||
+        (!!refer.messageServerId && message.messageServerId === refer.messageServerId)
+
+      if (!matched) {
+        return message
+      }
+
+      hasChanged = true
+      return { ...message }
+    })
+
+    if (hasChanged) {
+      current.list = nextList
+    }
+  }
+
+  private removePinnedMessageByRefer(
+    conversationId: string,
+    refer?: Partial<Pick<V2NIMMessage, 'messageClientId' | 'messageServerId'>>
+  ) {
+    const pinMap = this.pinnedMessageMap[conversationId]
+
+    if (!pinMap || !refer) {
+      return
+    }
+
+    this.getMessageReferKeys(refer).forEach((key) => {
+      delete pinMap[key]
+    })
+
+    Object.entries(pinMap).forEach(([key, pin]) => {
+      const matched =
+        (!!refer.messageClientId && pin.messageRefer.messageClientId === refer.messageClientId) ||
+        (!!refer.messageServerId && pin.messageRefer.messageServerId === refer.messageServerId)
+
+      if (matched) {
+        delete pinMap[key]
+      }
+    })
+  }
+
+  private removeRevokedPinnedMessages(conversationId: string) {
+    const pinMap = this.pinnedMessageMap[conversationId]
+
+    if (!pinMap) {
+      return
+    }
+
+    Object.entries(pinMap).forEach(([key, pin]) => {
+      if (this.isRevokedRefer(conversationId, pin.messageRefer)) {
+        delete pinMap[key]
+      }
+    })
+  }
+
+  private normalizeForwardMessage(message: V2NIMMessage) {
+    delete message.threadReply
+    return message
+  }
+
+  createCollectionForwardSourceMessage(message: V2NIMMessage) {
+    if (!nimStore.nim) {
+      return null
+    }
+
+    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT) {
+      return nimStore.nim.V2NIMMessageCreator.createTextMessage(message.text || '')
+    }
+
+    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_IMAGE) {
+      const attachment = message.attachment as V2NIMMessageImageAttachment | undefined
+      const source = attachment?.path || attachment?.url
+
+      if (!source) {
+        return null
+      }
+
+      const forwardSource = nimStore.nim.V2NIMMessageCreator.createImageMessage(
+        source,
+        attachment?.name || 'image.jpg',
+        undefined,
+        attachment?.width,
+        attachment?.height
+      )
+      forwardSource.attachment = attachment
+      return forwardSource
+    }
+
+    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_VIDEO) {
+      const attachment = message.attachment as V2NIMMessageFileAttachment | undefined
+      const source = attachment?.path || attachment?.url
+
+      if (!source) {
+        return null
+      }
+
+      const forwardSource = nimStore.nim.V2NIMMessageCreator.createVideoMessage(
+        source,
+        attachment?.name || 'video.mp4'
+      )
+      forwardSource.attachment = attachment
+      return forwardSource
+    }
+
+    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_FILE) {
+      const attachment = message.attachment as V2NIMMessageFileAttachment | undefined
+      const source = attachment?.path || attachment?.url
+
+      if (!source) {
+        return null
+      }
+
+      const forwardSource = nimStore.nim.V2NIMMessageCreator.createFileMessage(
+        source,
+        attachment?.name || 'file'
+      )
+      forwardSource.attachment = attachment
+      return forwardSource
+    }
+
+    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_LOCATION) {
+      const attachment = message.attachment as V2NIMMessageLocationAttachment | undefined
+
+      if (typeof attachment?.latitude !== 'number' || typeof attachment?.longitude !== 'number') {
+        return null
+      }
+
+      const forwardSource = nimStore.nim.V2NIMMessageCreator.createLocationMessage(
+        attachment.latitude,
+        attachment.longitude,
+        attachment.address || message.text || ''
+      )
+      forwardSource.text = message.text || attachment.address || ''
+      forwardSource.attachment = attachment
+      return forwardSource
+    }
+
+    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_CUSTOM) {
+      const attachment = message.attachment as V2NIMMessageCustomAttachment | undefined
+      const raw = attachment?.raw
+
+      if (!raw) {
+        return null
+      }
+
+      const forwardSource = nimStore.nim.V2NIMMessageCreator.createCustomMessage(
+        message.text || '',
+        raw
+      )
+      forwardSource.attachment = attachment
+      return forwardSource
+    }
+
+    return null
+  }
+
   private getPushPreview(message: V2NIMMessage) {
     switch (message.messageType) {
       case V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT:
-        return message.text || '你收到一条新消息'
+        return message.text || translateCurrentApp('commonReceiveNewMessage')
       case V2NIMMessageType.V2NIM_MESSAGE_TYPE_IMAGE:
-        return '[图片]'
+        return translateCurrentApp('commonImageShort')
+      case V2NIMMessageType.V2NIM_MESSAGE_TYPE_AUDIO:
+        return translateCurrentApp('commonAudioShort')
+      case V2NIMMessageType.V2NIM_MESSAGE_TYPE_LOCATION:
+        return translateCurrentApp('commonLocationShort')
       case V2NIMMessageType.V2NIM_MESSAGE_TYPE_FILE:
-        return '[文件]'
+        return translateCurrentApp('commonFileShort')
       default:
-        return '你收到一条新消息'
+        return translateCurrentApp('commonReceiveNewMessage')
     }
   }
 
@@ -171,50 +937,340 @@ class MessageStore {
     return !!nimStore.nim && nimStore.isLoggedIn()
   }
 
+  private ensureSendReady() {
+    if (!nimStore.nim) {
+      throw new Error(translateCurrentApp('offlineText' as never))
+    }
+
+    if (!this.canUseMessageService()) {
+      throw new Error(translateCurrentApp('connectingText' as never))
+    }
+
+    if (!nimStore.isConnected()) {
+      throw new Error(translateCurrentApp('connectingText' as never))
+    }
+  }
+
+  private async waitForSendReady() {
+    try {
+      await nimStore.waitForSendReady()
+    } catch (error) {
+      this.ensureSendReady()
+      throw error
+    }
+
+    this.ensureSendReady()
+  }
+
+  private async waitForNativeSendStateSettled(delayMs = 500) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs)
+    })
+  }
+
   private isIllegalStateError(error: unknown) {
     return error instanceof Error && error.message.toLowerCase().includes('illegal state')
   }
 
-  private buildSendParams(conversationId: string, message: V2NIMMessage) {
-    const conversation = conversationStore.getConversation(conversationId)
-    const pushEnabled = preferenceStore.preferences.notificationsEnabled && !conversation?.mute
+  private async toSettledResult<T>(promise: Promise<T>): Promise<PromiseSettledResult<T>> {
+    try {
+      return {
+        status: 'fulfilled',
+        value: await promise
+      }
+    } catch (reason) {
+      return {
+        status: 'rejected',
+        reason
+      }
+    }
+  }
+
+  private buildSendParams(conversationId: string, message: V2NIMMessage): V2NIMSendMessageParams {
+    const pushPayload = nimStore.nim ? buildPushPayload(conversationId, nimStore.nim) : undefined
+    const aiConfig = this.getAIConfig(conversationId, message)
+    const mentionPushInfo =
+      message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT
+        ? getMentionPushInfo(message.text || '', parseMentionExtension(message.serverExtension))
+        : null
 
     return {
       messageConfig: {
         readReceiptEnabled: preferenceStore.preferences.readReceiptEnabled
       },
       pushConfig: {
-        pushEnabled,
+        pushEnabled: true,
         pushNickEnabled: true,
-        pushContent: preferenceStore.preferences.showMessageDetail
-          ? this.getPushPreview(message)
-          : '你收到一条新消息'
+        pushPayload,
+        pushContent: this.getPushPreview(message),
+        ...mentionPushInfo
       },
+      aiConfig,
       clientAntispamEnabled: message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT,
       clientAntispamReplace: '***'
     }
   }
 
+  private applyTextMessageOptions(message: V2NIMMessage, options?: TextMessageOptions) {
+    const serverExtension = buildMentionExtension(
+      message.text || '',
+      options?.mentions || {},
+      options?.serverExtension || message.serverExtension
+    )
+
+    if (serverExtension) {
+      message.serverExtension = serverExtension
+    }
+
+    return message
+  }
+
+  private getConversationTargetId(conversationId: string) {
+    if (!nimStore.nim) {
+      return null
+    }
+
+    return nimStore.nim.V2NIMConversationIdUtil.parseConversationTargetId(conversationId)
+  }
+
+  isAIConversation(conversationId: string) {
+    const targetId = this.getConversationTargetId(conversationId)
+
+    if (!targetId) {
+      return false
+    }
+
+    return imStoreV2Bridge.aiUsers.some((item) => item.accountId === targetId)
+  }
+
+  private getAIConversationContext(conversationId: string, myAccountId: string) {
+    const history = (this.messagesMap[conversationId]?.list || [])
+      .filter(
+        (item) =>
+          item.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT && !!item.text?.trim()
+      )
+      .slice(-AI_MESSAGE_LIMIT)
+
+    const myFirstMessageIndex = history.findIndex((item) => item.senderId === myAccountId)
+    const effectiveHistory = myFirstMessageIndex === -1 ? [] : history.slice(myFirstMessageIndex)
+
+    return effectiveHistory.map((item) => ({
+      role:
+        item.senderId === myAccountId
+          ? ('user' as V2NIMAIModelRoleType)
+          : ('assistant' as V2NIMAIModelRoleType),
+      msg: item.text || '',
+      type: 0
+    }))
+  }
+
+  private getAIConfig(
+    conversationId: string,
+    message: V2NIMMessage
+  ): V2NIMMessageAIConfigParams | undefined {
+    if (!this.isAIConversation(conversationId)) {
+      return undefined
+    }
+
+    const accountId = this.getConversationTargetId(conversationId)
+    const myAccountId = nimStore.getLoginUser()
+
+    if (!accountId) {
+      return undefined
+    }
+
+    const aiConfig: V2NIMMessageAIConfigParams = {
+      accountId
+    }
+
+    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT) {
+      aiConfig.content = {
+        msg: message.text || '',
+        type: 0
+      }
+
+      if (message.threadReply) {
+        const replyMessage = this.getMessageByRefer(conversationId, message.threadReply)
+
+        if (replyMessage && replyMessage.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT) {
+          aiConfig.messages = [
+            {
+              role: 'user' as V2NIMAIModelRoleType,
+              msg: replyMessage.text || '',
+              type: 0
+            }
+          ]
+        }
+      } else if (myAccountId) {
+        aiConfig.messages = this.getAIConversationContext(conversationId, myAccountId)
+      }
+    }
+
+    return aiConfig
+  }
+
   private setAntispamReason(message: V2NIMMessage, reason: string) {
-    const key = this.getMessageKey(message)
+    const keys = this.getMessageKeyCandidatesWithFallback(message)
 
     runInAction(() => {
       if (!this.antispamMessageMap[message.conversationId]) {
         this.antispamMessageMap[message.conversationId] = {}
       }
 
-      this.antispamMessageMap[message.conversationId][key] = reason
+      keys.forEach((key) => {
+        this.antispamMessageMap[message.conversationId][key] = reason
+      })
     })
   }
 
-  private clearAntispamReason(conversationId: string, messageId: string) {
+  private clearAntispamReason(conversationId: string, messageId?: string | null) {
+    if (!messageId) {
+      return
+    }
+
     runInAction(() => {
       delete this.antispamMessageMap[conversationId]?.[messageId]
     })
   }
 
+  private migrateAntispamReason(
+    conversationId: string,
+    previousMessage: Pick<V2NIMMessage, 'messageClientId' | 'messageServerId'>,
+    nextMessage: Pick<V2NIMMessage, 'messageClientId' | 'messageServerId'>
+  ) {
+    const antispamMap = this.antispamMessageMap[conversationId]
+
+    if (!antispamMap) {
+      return
+    }
+
+    const previousKeys = this.getMessageKeyCandidatesWithFallback(previousMessage as V2NIMMessage)
+    const nextKeys = this.getMessageKeyCandidatesWithFallback(nextMessage as V2NIMMessage)
+    const reason = previousKeys.map((key) => antispamMap[key]).find((value) => !!value)
+
+    if (!reason) {
+      return
+    }
+
+    runInAction(() => {
+      nextKeys.forEach((key) => {
+        antispamMap[key] = reason
+      })
+
+      previousKeys
+        .filter((key) => !nextKeys.includes(key))
+        .forEach((key) => {
+          delete antispamMap[key]
+        })
+    })
+  }
+
+  private extractAntispamLabelCode(reason?: string) {
+    const normalizedReason = reason?.replace(/\\/g, '').trim()
+
+    if (!normalizedReason) {
+      return null
+    }
+
+    try {
+      const parsed = JSON.parse(normalizedReason) as unknown
+      const stack = [parsed]
+
+      while (stack.length > 0) {
+        const current = stack.shift()
+
+        if (!current || typeof current !== 'object') {
+          continue
+        }
+
+        if (Array.isArray(current)) {
+          stack.push(...current)
+          continue
+        }
+
+        const objectValue = current as Record<string, unknown>
+        const label = objectValue.label
+
+        if (typeof label === 'number' || typeof label === 'string') {
+          return String(label)
+        }
+
+        stack.push(...Object.values(objectValue))
+      }
+    } catch {
+      // Fall back to the native-compatible regex path below.
+    }
+
+    return normalizedReason.match(/"label"\s*:\s*(\d+)/)?.[1] || null
+  }
+
   private createAntispamTipText(reason?: string) {
-    return reason?.trim() || '内容可能涉及敏感信息，请调整后发送'
+    const labelCode = this.extractAntispamLabelCode(reason)
+    const categoryKey = labelCode ? ANTISPAM_LABEL_KEY_MAP[labelCode] : null
+    const category = translateCurrentApp((categoryKey || 'commonAntispamOther') as never)
+
+    return translateCurrentApp('commonSensitiveContentBlockedWithType' as never, {
+      type: category
+    })
+  }
+
+  private getSendResultAntispamReason(result: { antispamResult?: string } | null | undefined) {
+    if (!result?.antispamResult?.trim()) {
+      return null
+    }
+
+    return this.createAntispamTipText(result.antispamResult)
+  }
+
+  private isAttachmentUploadMessage(message: V2NIMMessage) {
+    return [
+      V2NIMMessageType.V2NIM_MESSAGE_TYPE_IMAGE,
+      V2NIMMessageType.V2NIM_MESSAGE_TYPE_VIDEO,
+      V2NIMMessageType.V2NIM_MESSAGE_TYPE_FILE,
+      V2NIMMessageType.V2NIM_MESSAGE_TYPE_AUDIO
+    ].includes(message.messageType)
+  }
+
+  private setAttachmentUploadProgress(
+    conversationId: string,
+    messageKey: string,
+    progress: number
+  ) {
+    const normalizedProgress = Math.max(0, Math.min(1, progress))
+
+    runInAction(() => {
+      if (!this.attachmentUploadProgressMap[conversationId]) {
+        this.attachmentUploadProgressMap[conversationId] = {}
+      }
+
+      this.attachmentUploadProgressMap[conversationId][messageKey] = normalizedProgress
+    })
+  }
+
+  private clearAttachmentUploadProgress(conversationId: string, messageKey: string) {
+    runInAction(() => {
+      delete this.attachmentUploadProgressMap[conversationId]?.[messageKey]
+    })
+  }
+
+  private setVideoUploadPreview(conversationId: string, messageKey: string, previewUri?: string) {
+    if (!previewUri) {
+      return
+    }
+
+    runInAction(() => {
+      if (!this.videoUploadPreviewMap[conversationId]) {
+        this.videoUploadPreviewMap[conversationId] = {}
+      }
+
+      this.videoUploadPreviewMap[conversationId][messageKey] = previewUri
+    })
+  }
+
+  private clearVideoUploadPreview(conversationId: string, messageKey: string) {
+    runInAction(() => {
+      delete this.videoUploadPreviewMap[conversationId]?.[messageKey]
+    })
   }
 
   private appendLocalTipsMessage(conversationId: string, text: string) {
@@ -296,20 +1352,151 @@ class MessageStore {
     return null
   }
 
+  private isBlockedSendFailure(message: V2NIMMessage) {
+    return message.messageStatus?.errorCode === BLACKLIST_SEND_ERROR_CODE
+  }
+
+  private extractErrorCode(error: unknown) {
+    if (!error || typeof error !== 'object') {
+      return undefined
+    }
+
+    const candidate = error as {
+      code?: unknown
+      errorCode?: unknown
+    }
+    const code = candidate.errorCode ?? candidate.code
+
+    return typeof code === 'number' ? code : undefined
+  }
+
+  shouldSuppressSendFailureAlert(error: unknown) {
+    const errorCode = this.extractErrorCode(error)
+
+    if (errorCode === BLACKLIST_SEND_ERROR_CODE || errorCode === FRIEND_DELETED_SEND_ERROR_CODE) {
+      return true
+    }
+
+    return !!this.extractAntispamReason(error)
+  }
+
+  private hydrateDraftMessage(conversationId: string, draftMessage: V2NIMMessage) {
+    if (!nimStore.nim) {
+      return draftMessage
+    }
+
+    const conversationType =
+      draftMessage.conversationType ||
+      nimStore.nim.V2NIMConversationIdUtil.parseConversationType(conversationId)
+    const targetId = nimStore.nim.V2NIMConversationIdUtil.parseConversationTargetId(conversationId)
+
+    return {
+      ...draftMessage,
+      conversationId,
+      conversationType,
+      receiverId: draftMessage.receiverId || targetId,
+      senderId: draftMessage.senderId || nimStore.getLoginUser() || draftMessage.senderId,
+      createTime: draftMessage.createTime || Date.now()
+    } as V2NIMMessage
+  }
+
   private mergeMessages(existing: V2NIMMessage[], incoming: V2NIMMessage[]) {
     const merged = new Map<string, V2NIMMessage>()
+    const aliasToPrimaryKey = new Map<string, string>()
+
+    const bindMessage = (message: V2NIMMessage, preferredPrimaryKey?: string) => {
+      const keyCandidates = this.getMessageKeyCandidatesWithFallback(message)
+      const matchedPrimaryKey = keyCandidates.find((candidate) => aliasToPrimaryKey.has(candidate))
+      const primaryKey = preferredPrimaryKey || matchedPrimaryKey || keyCandidates[0]
+
+      if (!primaryKey) {
+        return
+      }
+
+      merged.set(primaryKey, message)
+      keyCandidates.forEach((candidate) => {
+        aliasToPrimaryKey.set(candidate, primaryKey)
+      })
+    }
 
     existing.forEach((message) => {
-      merged.set(this.getMessageKey(message), message)
+      const hydratedMessage = this.hydrateRevokeStateFromMessage(message)
+      bindMessage(hydratedMessage)
     })
 
     incoming.forEach((message) => {
-      merged.set(this.getMessageKey(message), message)
+      const recallType = (message as V2NIMMessage & { recallType?: string }).recallType
+
+      if (recallType === 'reCallMsg' || recallType === 'beReCallMsg') {
+        const originalKey = this.getMessageKey(message).replace(/^recall-/, '')
+        const oldText = (message as V2NIMMessage & { oldText?: string }).oldText
+
+        if (!this.revokedMessageMap[message.conversationId]) {
+          this.revokedMessageMap[message.conversationId] = {}
+        }
+        if (!this.revokedMessageTimeMap[message.conversationId]) {
+          this.revokedMessageTimeMap[message.conversationId] = {}
+        }
+
+        this.revokedMessageMap[message.conversationId][originalKey] =
+          recallType === 'reCallMsg'
+            ? translateCurrentApp('commonRecallByYou')
+            : translateCurrentApp('commonRecalledMessage')
+        this.revokedMessageTimeMap[message.conversationId][originalKey] =
+          this.normalizeRevokeTime(
+            (message as V2NIMMessage & { recallTime?: number; revokeTime?: number }).revokeTime ??
+              (message as V2NIMMessage & { recallTime?: number; revokeTime?: number }).recallTime
+          ) || message.createTime
+
+        if (oldText) {
+          bindMessage(
+            {
+              ...message,
+              messageClientId: originalKey,
+              messageType: V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT,
+              text: oldText
+            },
+            originalKey
+          )
+        }
+
+        if (!oldText && !merged.has(originalKey)) {
+          bindMessage(
+            {
+              ...message,
+              messageClientId: originalKey,
+              messageType: V2NIMMessageType.V2NIM_MESSAGE_TYPE_TIPS,
+              text:
+                recallType === 'reCallMsg'
+                  ? translateCurrentApp('commonRecallByYou')
+                  : translateCurrentApp('commonRecalledMessage')
+            },
+            originalKey
+          )
+        }
+
+        return
+      }
+
+      const hydratedMessage = this.hydrateRevokeStateFromMessage(message)
+      bindMessage(hydratedMessage)
     })
 
     return Array.from(merged.values())
       .filter((message) => !message.isDelete)
       .sort((left, right) => left.createTime - right.createTime)
+  }
+
+  private updateHistoryAnchor(
+    conversationId: string,
+    candidateAnchor: V2NIMMessage | null,
+    { reset = false }: { reset?: boolean } = {}
+  ) {
+    const current = this.ensureConversationState(conversationId)
+
+    current.historyAnchor = reset
+      ? candidateAnchor
+      : this.pickOlderHistoryAnchor(current.historyAnchor, candidateAnchor)
   }
 
   private updateMessage(
@@ -330,7 +1517,105 @@ class MessageStore {
     this.syncConversationPreview(conversationId)
   }
 
+  private updateMessageInPlace(
+    conversationId: string,
+    messageKey: string,
+    updater: (message: V2NIMMessage) => V2NIMMessage
+  ) {
+    this.updateMessage(
+      conversationId,
+      (message) => this.getMessageKey(message) === messageKey,
+      updater
+    )
+  }
+
+  private replaceMessageAndSort(
+    conversationId: string,
+    messageKey: string,
+    nextMessage: V2NIMMessage
+  ) {
+    runInAction(() => {
+      const current = this.messagesMap[conversationId]
+
+      if (!current) {
+        return
+      }
+
+      current.list = current.list
+        .map((message) => (this.getMessageKey(message) === messageKey ? nextMessage : message))
+        .sort((left, right) => left.createTime - right.createTime)
+    })
+
+    this.syncConversationPreview(conversationId)
+  }
+
+  private hasPersistedRevokeMarker(message: V2NIMMessage) {
+    return this.getMessageExtension(message)[REVOKE_LOCAL_MESSAGE] === true
+  }
+
+  private shouldRetainLocalMessageWhenReplacingHistory(message: V2NIMMessage) {
+    return (
+      message.sendingState === V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_FAILED ||
+      message.sendingState === V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SENDING ||
+      !!this.getRevokedText(message) ||
+      this.hasPersistedRevokeMarker(message)
+    )
+  }
+
+  private getLocalRetainedMessages(conversationId: string) {
+    return (this.messagesMap[conversationId]?.list || []).filter(
+      this.shouldRetainLocalMessageWhenReplacingHistory
+    )
+  }
+
+  private mergeServerMessagesWithLocalUnsent(
+    conversationId: string,
+    serverMessages: V2NIMMessage[]
+  ) {
+    const localRetainedMessages = this.getLocalRetainedMessages(conversationId)
+
+    if (localRetainedMessages.length === 0) {
+      return this.mergeMessages([], serverMessages)
+    }
+
+    return this.mergeMessages([], [...serverMessages, ...localRetainedMessages])
+  }
+
+  private applySendFailure(conversationId: string, messageKey: string, error: unknown) {
+    const antispamReason = this.extractAntispamReason(error)
+    const errorCode = this.extractErrorCode(error)
+
+    this.updateMessageInPlace(conversationId, messageKey, (message) => ({
+      ...message,
+      messageStatus: errorCode
+        ? {
+            ...message.messageStatus,
+            errorCode
+          }
+        : message.messageStatus,
+      sendingState: V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_FAILED
+    }))
+
+    const failedMessage = this.getMessageById(conversationId, messageKey)
+
+    if (antispamReason && failedMessage) {
+      this.setAntispamReason(failedMessage, antispamReason)
+    }
+
+    if (errorCode === BLACKLIST_SEND_ERROR_CODE) {
+      this.appendLocalTipsMessage(conversationId, BLACKLIST_SEND_TIP())
+    }
+
+    if (errorCode === FRIEND_DELETED_SEND_ERROR_CODE) {
+      this.appendLocalTipsMessage(conversationId, FRIEND_DELETED_SEND_TIP())
+    }
+  }
+
   private syncConversationPreview(conversationId: string) {
+    if (!conversationId) {
+      return
+    }
+
     const current = this.messagesMap[conversationId]
 
     if (!current) {
@@ -347,10 +1632,14 @@ class MessageStore {
       return
     }
 
-    const messageKey = this.getMessageKey(latestMessage)
-    const revokedText = this.revokedMessageMap[conversationId]?.[messageKey]
+    if (
+      latestMessage.sendingState === V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_FAILED
+    ) {
+      const failedPreviewText = this.isBlockedSendFailure(latestMessage)
+        ? translateCurrentApp('messageStoreReminderMessage')
+        : normalizeDisplayErrorMessage(latestMessage.text || '') ||
+          translateCurrentApp('commonSendFailedShort')
 
-    if (revokedText) {
       conversationStore.updateConversation(conversationId, {
         sortOrder: latestMessage.createTime,
         lastMessage: {
@@ -363,7 +1652,29 @@ class MessageStore {
             createTime: latestMessage.createTime
           },
           messageType: V2NIMMessageType.V2NIM_MESSAGE_TYPE_TIPS,
-          text: revokedText
+          text: failedPreviewText
+        } as never
+      })
+      return
+    }
+
+    const messageKey = this.getMessageKey(latestMessage)
+    const revokedText = this.revokedMessageMap[conversationId]?.[messageKey]
+
+    if (revokedText) {
+      conversationStore.updateConversation(conversationId, {
+        sortOrder: latestMessage.createTime,
+        lastMessage: {
+          lastMessageState: LAST_MESSAGE_STATE_REVOKE,
+          messageRefer: {
+            conversationId,
+            conversationType: latestMessage.conversationType,
+            receiverId: latestMessage.receiverId,
+            senderId: latestMessage.senderId,
+            createTime: latestMessage.createTime
+          },
+          messageType: V2NIMMessageType.V2NIM_MESSAGE_TYPE_TIPS,
+          text: translateCurrentApp('commonRecalledMessage')
         } as never
       })
       return
@@ -381,7 +1692,10 @@ class MessageStore {
           createTime: latestMessage.createTime
         },
         messageType: latestMessage.messageType,
-        text: latestMessage.text,
+        text:
+          latestMessage.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_TIPS
+            ? normalizeDisplayErrorMessage(latestMessage.text || '') || latestMessage.text
+            : latestMessage.text,
         attachment: latestMessage.attachment,
         subType: latestMessage.subType
       } as never
@@ -391,76 +1705,232 @@ class MessageStore {
   private async performSend(
     conversationId: string,
     draftMessage: V2NIMMessage,
-    sender: () => Promise<{ message: V2NIMMessage }>
+    sender: (progress: (percentage: number) => void) => Promise<SendMessageResult>,
+    options?: PerformSendOptions
   ) {
+    const hydratedDraftMessage = this.hydrateDraftMessage(conversationId, draftMessage)
+    const draftMessageKey = this.getMessageKey(hydratedDraftMessage)
+    const isAudioMessage =
+      hydratedDraftMessage.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_AUDIO
+    const debugTraceId = options?.debugTraceId
+
+    if (isAudioMessage) {
+      logIOSVoiceDebug('store.audio.perform.start', {
+        traceId: debugTraceId,
+        conversationId,
+        draftMessageKey,
+        draftMessage: getAudioMessageDebugPayload(hydratedDraftMessage)
+      })
+    }
+
     this.addMessage({
-      ...draftMessage,
+      ...hydratedDraftMessage,
       sendingState: V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SENDING
     })
 
-    const clientAntispamReason = this.getClientAntispamReason(draftMessage)
+    if (this.isAttachmentUploadMessage(hydratedDraftMessage)) {
+      this.setAttachmentUploadProgress(conversationId, draftMessageKey, 0)
+    }
+
+    this.setVideoUploadPreview(conversationId, draftMessageKey, options?.videoUploadPreview)
+
+    const clientAntispamReason = this.getClientAntispamReason(hydratedDraftMessage)
 
     if (clientAntispamReason) {
       this.updateMessage(
         conversationId,
-        (message) => this.getMessageKey(message) === this.getMessageKey(draftMessage),
+        (message) => this.getMessageKey(message) === draftMessageKey,
         (message) => ({
           ...message,
           sendingState: V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_FAILED
         })
       )
-      this.setAntispamReason(draftMessage, clientAntispamReason)
-      this.appendLocalTipsMessage(conversationId, clientAntispamReason)
+      this.clearAttachmentUploadProgress(conversationId, draftMessageKey)
+      this.clearVideoUploadPreview(conversationId, draftMessageKey)
+      this.setAntispamReason(hydratedDraftMessage, clientAntispamReason)
+      if (isAudioMessage) {
+        logIOSVoiceDebug('store.audio.perform.blocked.clientAntispam', {
+          traceId: debugTraceId,
+          conversationId,
+          draftMessageKey,
+          reason: clientAntispamReason
+        })
+      }
       throw new Error(clientAntispamReason)
     }
 
+    const sendWithProgress = () =>
+      sender((percentage) => {
+        if (isAudioMessage) {
+          logIOSVoiceDebug('store.audio.upload.progress', {
+            traceId: debugTraceId,
+            conversationId,
+            draftMessageKey,
+            percentage
+          })
+        }
+        this.setAttachmentUploadProgress(conversationId, draftMessageKey, percentage)
+      })
+
     try {
-      const result = await sender()
-      this.clearAntispamReason(conversationId, this.getMessageKey(draftMessage))
-      this.addMessage(result.message)
-      return result.message
-    } catch (error) {
-      const antispamReason = this.extractAntispamReason(error)
-
-      this.updateMessage(
-        conversationId,
-        (message) => this.getMessageKey(message) === this.getMessageKey(draftMessage),
-        (message) => ({
-          ...message,
-          sendingState: V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_FAILED
+      if (isAudioMessage) {
+        logIOSVoiceDebug('store.audio.waitSendReady.start', {
+          traceId: debugTraceId,
+          conversationId,
+          draftMessageKey
         })
-      )
+      }
+      await this.waitForSendReady()
+      if (isAudioMessage) {
+        logIOSVoiceDebug('store.audio.ensureCloudConversation.start', {
+          traceId: debugTraceId,
+          conversationId,
+          draftMessageKey
+        })
+      }
+      await imStoreV2Bridge.ensureCloudConversation(conversationId)
+      let result: SendMessageResult
 
-      if (antispamReason) {
-        this.setAntispamReason(draftMessage, antispamReason)
-        this.appendLocalTipsMessage(conversationId, antispamReason)
+      try {
+        if (isAudioMessage) {
+          logIOSVoiceDebug('store.audio.sdkSend.start', {
+            traceId: debugTraceId,
+            conversationId,
+            draftMessageKey
+          })
+        }
+        result = await sendWithProgress()
+      } catch (error) {
+        if (isAudioMessage) {
+          logIOSVoiceDebug('store.audio.sdkSend.error.first', {
+            traceId: debugTraceId,
+            conversationId,
+            draftMessageKey,
+            code: getVoiceStoreErrorCode(error),
+            error: error instanceof Error ? error.message : String(error),
+            illegalStateRetry: this.isIllegalStateError(error)
+          })
+        }
+        const isTransientAudioUploadError =
+          isAudioMessage && isTransientAndroidAudioUploadError(error)
+
+        if (!this.isIllegalStateError(error) && !isTransientAudioUploadError) {
+          throw error
+        }
+
+        await this.waitForNativeSendStateSettled(isTransientAudioUploadError ? 300 : 500)
+        await this.waitForSendReady()
+        if (isAudioMessage) {
+          logIOSVoiceDebug('store.audio.sdkSend.retry', {
+            traceId: debugTraceId,
+            conversationId,
+            draftMessageKey,
+            reason: isTransientAudioUploadError ? 'transient-stream-closed' : 'illegal-state'
+          })
+        }
+        result = await sendWithProgress()
       }
 
+      if (isAudioMessage) {
+        logIOSVoiceDebug('store.audio.sdkSend.done', {
+          traceId: debugTraceId,
+          conversationId,
+          draftMessageKey,
+          resultMessage: getAudioMessageDebugPayload(result.message),
+          antispamResult: result.antispamResult
+        })
+      }
+
+      const sendResultAntispamReason = this.getSendResultAntispamReason(result)
+
+      if (sendResultAntispamReason) {
+        const antispamError = createAntispamSendFailureError(
+          sendResultAntispamReason,
+          result.antispamResult
+        )
+        this.applySendFailure(conversationId, draftMessageKey, {
+          antispamResult: result.antispamResult
+        })
+        this.clearAttachmentUploadProgress(conversationId, draftMessageKey)
+        this.clearVideoUploadPreview(conversationId, draftMessageKey)
+        if (isAudioMessage) {
+          logIOSVoiceDebug('store.audio.perform.blocked.serverAntispam', {
+            traceId: debugTraceId,
+            conversationId,
+            draftMessageKey,
+            reason: sendResultAntispamReason,
+            antispamResult: result.antispamResult
+          })
+        }
+        throw antispamError
+      }
+
+      if (hasSendFailureResult(result.message)) {
+        const sendFailureError = createSendFailureError(result.message, result)
+        this.applySendFailure(conversationId, draftMessageKey, sendFailureError)
+        this.clearAttachmentUploadProgress(conversationId, draftMessageKey)
+        this.clearVideoUploadPreview(conversationId, draftMessageKey)
+        if (isAudioMessage) {
+          logIOSVoiceDebug('store.audio.perform.failed.server', {
+            traceId: debugTraceId,
+            conversationId,
+            draftMessageKey,
+            code: getVoiceStoreErrorCode(sendFailureError),
+            resultMessage: getAudioMessageDebugPayload(result.message)
+          })
+        }
+        throw sendFailureError
+      }
+
+      this.clearAntispamReason(conversationId, draftMessageKey)
+      this.clearAttachmentUploadProgress(conversationId, draftMessageKey)
+      this.clearVideoUploadPreview(conversationId, draftMessageKey)
+      this.migrateAntispamReason(conversationId, hydratedDraftMessage, result.message)
+      this.addMessage(result.message)
+      if (isAudioMessage) {
+        logIOSVoiceDebug('store.audio.perform.done', {
+          traceId: debugTraceId,
+          conversationId,
+          draftMessageKey,
+          resultMessageKey: this.getMessageKey(result.message),
+          resultMessage: getAudioMessageDebugPayload(result.message)
+        })
+      }
+      return result.message
+    } catch (error) {
+      if (isAudioMessage) {
+        logIOSVoiceDebug('store.audio.perform.error', {
+          traceId: debugTraceId,
+          conversationId,
+          draftMessageKey,
+          code: getVoiceStoreErrorCode(error),
+          error: error instanceof Error ? error.message : String(error),
+          draftMessage: getAudioMessageDebugPayload(hydratedDraftMessage)
+        })
+      }
+      if (!this.isAntispamBlocked(hydratedDraftMessage)) {
+        this.applySendFailure(conversationId, draftMessageKey, error)
+      }
+      this.clearAttachmentUploadProgress(conversationId, draftMessageKey)
+      this.clearVideoUploadPreview(conversationId, draftMessageKey)
       throw error
     }
   }
 
   getConversationMessages(conversationId: string): MessagesItem {
-    const current = this.messagesMap[conversationId]
-
-    if (!current) {
-      return DEFAULT_MESSAGES_ITEM
-    }
-
-    return {
-      list: current.list,
-      isSync: current.isSync,
-      loading: current.loading,
-      loadingMore: current.loadingMore,
-      hasMore: current.hasMore
-    }
+    return this.messagesMap[conversationId] || DEFAULT_MESSAGES_ITEM
   }
 
   getMessageById(conversationId: string, messageId: string) {
     return (
       this.messagesMap[conversationId]?.list.find(
-        (message) => this.getMessageKey(message) === messageId
-      ) || null
+        (message) =>
+          message.messageClientId === messageId ||
+          message.messageServerId === messageId ||
+          this.getMessageKey(message) === messageId
+      ) ||
+      this.replySourceMessageMap[conversationId]?.[messageId] ||
+      null
     )
   }
 
@@ -468,8 +1938,40 @@ class MessageStore {
     return this.revokedMessageMap[message.conversationId]?.[this.getMessageKey(message)] || null
   }
 
+  getRevokeTime(message: V2NIMMessage) {
+    const messageKey = this.getMessageKey(message)
+    return this.revokedMessageTimeMap[message.conversationId]?.[messageKey] || null
+  }
+
+  canReeditRevokedMessage(message: V2NIMMessage) {
+    if (!this.getRevokedText(message)) {
+      return false
+    }
+
+    const revokeTime = this.getRevokeTime(message) || message.createTime
+    return Date.now() - revokeTime <= REEDIT_TIME_LIMIT_MS
+  }
+
   getAntispamReason(message: V2NIMMessage) {
-    return this.antispamMessageMap[message.conversationId]?.[this.getMessageKey(message)] || null
+    const antispamMap = this.antispamMessageMap[message.conversationId]
+
+    if (!antispamMap) {
+      return null
+    }
+
+    const matchedKey = this.getMessageKeyCandidatesWithFallback(message).find(
+      (key) => !!antispamMap[key]
+    )
+
+    return matchedKey ? antispamMap[matchedKey] : null
+  }
+
+  getAttachmentUploadProgress(message: V2NIMMessage) {
+    return this.attachmentUploadProgressMap[message.conversationId]?.[this.getMessageKey(message)]
+  }
+
+  getVideoUploadPreview(message: V2NIMMessage) {
+    return this.videoUploadPreviewMap[message.conversationId]?.[this.getMessageKey(message)]
   }
 
   isAntispamBlocked(message: V2NIMMessage) {
@@ -477,16 +1979,96 @@ class MessageStore {
   }
 
   isMessagePinned(message: V2NIMMessage) {
-    return !!this.pinnedMessageMap[message.conversationId]?.[this.getMessageKey(message)]
+    return !!this.getPinnedMessageInfo(message)
+  }
+
+  getPinnedMessageInfo(message: V2NIMMessage) {
+    const pinMap = this.pinnedMessageMap[message.conversationId]
+
+    if (!pinMap) {
+      return null
+    }
+
+    if (this.isRevokedRefer(message.conversationId, message)) {
+      return null
+    }
+
+    for (const key of this.getMessageReferKeys(message)) {
+      if (pinMap[key]) {
+        return pinMap[key]
+      }
+    }
+
+    return null
   }
 
   getPinnedMessages(conversationId: string) {
-    const pins = Object.values(this.pinnedMessageMap[conversationId] || {})
+    const pinMap = this.pinnedMessageMap[conversationId] || {}
+    const seenPinKeys = new Set<string>()
+    const pinnedMessagesByKey = new Map<string, V2NIMMessage>()
 
-    return pins
-      .map((pin) => this.getMessageByRefer(conversationId, pin.messageRefer))
-      .filter(Boolean)
-      .sort((left, right) => (right?.createTime || 0) - (left?.createTime || 0)) as V2NIMMessage[]
+    Object.values(pinMap).forEach((pin) => {
+      if (this.isRevokedRefer(conversationId, pin.messageRefer)) {
+        return
+      }
+
+      const referKeys = this.getMessageReferKeys(pin.messageRefer)
+
+      if (referKeys.some((key) => seenPinKeys.has(key))) {
+        referKeys.forEach((key) => seenPinKeys.add(key))
+        return
+      }
+
+      referKeys.forEach((key) => seenPinKeys.add(key))
+
+      const message = this.getMessageByRefer(conversationId, pin.messageRefer)
+
+      if (!message || this.isRevokedRefer(conversationId, message)) {
+        return
+      }
+
+      const messageKey = this.getMessageKeyCandidatesWithFallback(message)[0]
+
+      if (messageKey) {
+        pinnedMessagesByKey.set(messageKey, message)
+      }
+    })
+
+    return Array.from(pinnedMessagesByKey.values()).sort(
+      (left, right) => (right.createTime || 0) - (left.createTime || 0)
+    )
+  }
+
+  getTrackedPinnedConversationIds() {
+    return Object.keys(this.pinnedMessageMap)
+  }
+
+  getLoadedConversationIds() {
+    return Object.keys(this.messagesMap)
+  }
+
+  async refreshPinnedMessages(conversationIds: (string | null | undefined)[]) {
+    if (!this.canUseMessageService()) {
+      return []
+    }
+
+    const targetConversationIds = Array.from(
+      new Set(
+        conversationIds.filter((conversationId): conversationId is string => !!conversationId)
+      )
+    )
+
+    if (targetConversationIds.length === 0) {
+      return []
+    }
+
+    const results: PromiseSettledResult<V2NIMMessage[]>[] = []
+
+    for (const conversationId of targetConversationIds) {
+      results.push(await this.toSettledResult(this.loadPinnedMessages(conversationId)))
+    }
+
+    return results
   }
 
   setActiveConversation(conversationId: string | null) {
@@ -522,10 +2104,112 @@ class MessageStore {
     })
   }
 
+  async hydrateMissingReplySources(conversationId: string, messages: V2NIMMessage[]) {
+    if (!this.canUseMessageService() || messages.length === 0) {
+      return []
+    }
+
+    const missingRefers = new Map<string, MessageReplyRefer>()
+
+    messages.forEach((message) => {
+      const threadReply = message.threadReply as MessageReplyRefer | undefined
+
+      if (!threadReply) {
+        return
+      }
+
+      if (this.getMessageByRefer(conversationId, threadReply)) {
+        return
+      }
+
+      if (this.isRevokedRefer(conversationId, threadReply)) {
+        return
+      }
+
+      const referKeys = this.getMessageReferKeys(threadReply)
+
+      if (referKeys.length === 0) {
+        return
+      }
+
+      missingRefers.set(referKeys.join('|'), {
+        conversationId: threadReply.conversationId || conversationId,
+        conversationType: threadReply.conversationType || message.conversationType,
+        senderId: threadReply.senderId,
+        receiverId: threadReply.receiverId || message.receiverId,
+        messageClientId: threadReply.messageClientId,
+        messageServerId: threadReply.messageServerId,
+        createTime: threadReply.createTime
+      })
+    })
+
+    const refers = Array.from(missingRefers.values()).filter(
+      (refer): refer is V2NIMMessageRefer =>
+        !!refer.senderId &&
+        !!refer.receiverId &&
+        !!refer.messageClientId &&
+        !!refer.messageServerId &&
+        !!refer.createTime &&
+        !!refer.conversationId &&
+        !!refer.conversationType
+    )
+
+    if (refers.length === 0) {
+      return []
+    }
+
+    const hydrationKey = `${conversationId}:${refers
+      .map((refer) => this.getMessageReferKeys(refer).join('|'))
+      .sort()
+      .join(',')}`
+    const existingPromise = this.replySourceHydrationPromiseByKey.get(hydrationKey)
+
+    if (existingPromise) {
+      return existingPromise
+    }
+
+    const promise = nimStore
+      .nim!.V2NIMMessageService.getMessageListByRefers(refers)
+      .then((hydratedMessages: V2NIMMessage[]) => {
+        if (hydratedMessages.length > 0) {
+          runInAction(() => {
+            if (!this.replySourceMessageMap[conversationId]) {
+              this.replySourceMessageMap[conversationId] = {}
+            }
+
+            hydratedMessages.forEach((message) => {
+              this.getMessageReferKeys(message).forEach((key) => {
+                this.replySourceMessageMap[conversationId][key] = message
+              })
+            })
+          })
+        }
+
+        return hydratedMessages
+      })
+      .catch((error: unknown) => {
+        if (this.isIllegalStateError(error)) {
+          return []
+        }
+
+        throw error
+      })
+      .finally(() => {
+        this.replySourceHydrationPromiseByKey.delete(hydrationKey)
+      })
+
+    this.replySourceHydrationPromiseByKey.set(hydrationKey, promise)
+    return promise
+  }
+
   applyP2PReadReceipts(readReceipts: V2NIMP2PMessageReadReceipt[]) {
     runInAction(() => {
       readReceipts.forEach((receipt) => {
-        this.p2pReceiptMap[receipt.conversationId] = receipt
+        const currentReceipt = this.p2pReceiptMap[receipt.conversationId]
+
+        if (!currentReceipt || receipt.timestamp > currentReceipt.timestamp) {
+          this.p2pReceiptMap[receipt.conversationId] = receipt
+        }
       })
     })
   }
@@ -537,15 +2221,14 @@ class MessageStore {
           this.teamReceiptMap[receipt.conversationId] = {}
         }
 
-        this.teamReceiptMap[receipt.conversationId][
-          receipt.messageClientId || receipt.messageServerId
-        ] = receipt
+        this.getMessageReferKeys(receipt).forEach((key) => {
+          this.teamReceiptMap[receipt.conversationId][key] = receipt
+        })
       })
     })
   }
 
   applyRevokeNotifications(notifications: V2NIMMessageRevokeNotification[]) {
-    const currentAccountId = nimStore.getLoginUser()
     const affectedConversationIds = new Set<string>()
 
     runInAction(() => {
@@ -556,20 +2239,65 @@ class MessageStore {
         if (!this.revokedMessageMap[conversationId]) {
           this.revokedMessageMap[conversationId] = {}
         }
+        if (!this.revokedMessageTimeMap[conversationId]) {
+          this.revokedMessageTimeMap[conversationId] = {}
+        }
 
-        this.revokedMessageMap[conversationId][messageClientId || messageServerId] =
-          notification.revokeAccountId === currentAccountId ? '你撤回了一条消息' : '此消息已撤回'
+        const key = messageClientId || messageServerId
+        const referKeys = this.getMessageReferKeys({
+          messageClientId,
+          messageServerId
+        })
+        const revokeTime = this.getRevokeTimeFromNotification(notification)
+        const revokedText =
+          notification.revokeAccountId === nimStore.getLoginUser()
+            ? translateCurrentApp('commonRecallByYou')
+            : translateCurrentApp('commonRecalledMessage')
+
+        referKeys.forEach((referKey) => {
+          this.revokedMessageMap[conversationId][referKey] = revokedText
+          this.revokedMessageTimeMap[conversationId][referKey] = revokeTime
+        })
+
+        const current = this.ensureConversationState(conversationId)
+        const exists = current.list.some((message) => this.getMessageKey(message) === key)
+
+        if (notification.serverExtension) {
+          current.list = current.list.map((message) =>
+            this.getMessageKey(message) === key
+              ? {
+                  ...message,
+                  serverExtension: notification.serverExtension
+                }
+              : message
+          )
+        }
+
+        if (!exists) {
+          current.list = this.mergeMessages(current.list, [
+            {
+              ...notification.messageRefer,
+              conversationId,
+              serverExtension: notification.serverExtension,
+              messageType: V2NIMMessageType.V2NIM_MESSAGE_TYPE_TIPS,
+              sendingState: V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED
+            } as V2NIMMessage
+          ])
+        }
+
+        this.removePinnedMessageByRefer(conversationId, notification.messageRefer)
       })
     })
 
     affectedConversationIds.forEach((conversationId) => {
+      conversationStore.decrementUnread(conversationId)
       this.syncConversationPreview(conversationId)
     })
   }
 
   applyPinNotification(notification: V2NIMMessagePinNotification) {
     const { conversationId, messageClientId, messageServerId } = notification.pin.messageRefer
-    const key = messageClientId || messageServerId
+    const referKeys = this.getMessageReferKeys({ messageClientId, messageServerId })
 
     runInAction(() => {
       if (!this.pinnedMessageMap[conversationId]) {
@@ -577,17 +2305,23 @@ class MessageStore {
       }
 
       if (notification.pinState === V2NIMMessagePinState.V2NIM_MESSAGE_PIN_STATE_NOT_PINNED) {
-        delete this.pinnedMessageMap[conversationId][key]
+        this.removePinnedMessageByRefer(conversationId, notification.pin.messageRefer)
+        this.refreshMessageReferenceByRefer(conversationId, notification.pin.messageRefer)
         return
       }
 
-      this.pinnedMessageMap[conversationId][key] = {
+      const pin = {
         messageRefer: notification.pin.messageRefer,
         opeartorId: notification.pin.operatorId,
         serverExtension: notification.pin.serverExtension,
         createTime: notification.pin.createTime || notification.pin.updateTime,
         updateTime: notification.pin.updateTime
       }
+
+      referKeys.forEach((key) => {
+        this.pinnedMessageMap[conversationId][key] = pin
+      })
+      this.refreshMessageReferenceByRefer(conversationId, notification.pin.messageRefer)
     })
   }
 
@@ -595,9 +2329,13 @@ class MessageStore {
     runInAction(() => {
       this.pinnedMessageMap[conversationId] = {}
       pins.forEach((pin) => {
-        this.pinnedMessageMap[conversationId][
-          pin.messageRefer.messageClientId || pin.messageRefer.messageServerId
-        ] = pin
+        if (this.isRevokedRefer(conversationId, pin.messageRefer)) {
+          return
+        }
+
+        this.getMessageReferKeys(pin.messageRefer).forEach((key) => {
+          this.pinnedMessageMap[conversationId][key] = pin
+        })
       })
     })
   }
@@ -605,6 +2343,10 @@ class MessageStore {
   isPeerRead(message: V2NIMMessage) {
     if (message.sendingState !== V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED) {
       return false
+    }
+
+    if (this.isAIConversation(message.conversationId)) {
+      return true
     }
 
     if (nimStore.nim?.V2NIMMessageService.isPeerRead(message)) {
@@ -615,7 +2357,42 @@ class MessageStore {
   }
 
   getTeamReadReceipt(message: V2NIMMessage) {
-    return this.teamReceiptMap[message.conversationId]?.[this.getMessageKey(message)] || null
+    const receiptMap = this.teamReceiptMap[message.conversationId]
+
+    if (!receiptMap) {
+      return null
+    }
+
+    const receiptKey = this.getMessageKeyCandidates(message).find((key) => receiptMap[key])
+
+    return receiptKey ? receiptMap[receiptKey] : null
+  }
+
+  private applyTeamReadReceiptAliases(
+    messages: V2NIMMessage[],
+    receipt: V2NIMTeamMessageReadReceipt
+  ) {
+    const aliasKeys = Array.from(
+      new Set(messages.flatMap((message) => this.getMessageKeyCandidates(message)))
+    )
+
+    if (aliasKeys.length === 0) {
+      return
+    }
+
+    runInAction(() => {
+      if (!this.teamReceiptMap[receipt.conversationId]) {
+        this.teamReceiptMap[receipt.conversationId] = {}
+      }
+
+      this.getMessageReferKeys(receipt).forEach((key) => {
+        this.teamReceiptMap[receipt.conversationId][key] = receipt
+      })
+
+      aliasKeys.forEach((key) => {
+        this.teamReceiptMap[receipt.conversationId][key] = receipt
+      })
+    })
   }
 
   async refreshP2PReadReceipt(conversationId: string) {
@@ -643,15 +2420,68 @@ class MessageStore {
       return []
     }
 
+    const deduplicatedMessages = Array.from(
+      new Map(
+        messages.map((message) => [this.getReadReceiptKey(message), message] as const)
+      ).values()
+    )
+
+    const receiptBatches = this.chunkMessages(
+      deduplicatedMessages,
+      TEAM_READ_RECEIPT_QUERY_MAX_BATCH_SIZE
+    )
+    const receipts: V2NIMTeamMessageReadReceipt[] = []
+
+    for (const batch of receiptBatches) {
+      const batchReceipts = await this.fetchTeamReadReceiptsWithFallback(batch)
+      receipts.push(...batchReceipts)
+    }
+
+    this.applyTeamReadReceipts(receipts)
+    deduplicatedMessages.forEach((message) => {
+      const receipt = receipts.find(
+        (item) =>
+          item.conversationId === message.conversationId &&
+          this.getMessageKeyCandidates(message).some(
+            (key) => key === item.messageClientId || key === item.messageServerId
+          )
+      )
+
+      if (receipt) {
+        this.applyTeamReadReceiptAliases([message], receipt)
+      }
+    })
+
+    return receipts
+  }
+
+  private async fetchTeamReadReceiptsWithFallback(
+    messages: V2NIMMessage[]
+  ): Promise<V2NIMTeamMessageReadReceipt[]> {
+    if (messages.length === 0) {
+      return []
+    }
+
     const nim = nimStore.nim!
 
     try {
-      const receipts = await nim.V2NIMMessageService.getTeamMessageReceipts(messages)
-      this.applyTeamReadReceipts(receipts)
-      return receipts
+      return await nim.V2NIMMessageService.getTeamMessageReceipts(messages)
     } catch (error) {
       if (this.isIllegalStateError(error)) {
         return []
+      }
+
+      const errorCode = this.extractErrorCode(error)
+
+      if (errorCode === 414 && messages.length > 1) {
+        const midpoint = Math.ceil(messages.length / 2)
+        const leftBatch = messages.slice(0, midpoint)
+        const rightBatch = messages.slice(midpoint)
+
+        const leftReceipts = await this.fetchTeamReadReceiptsWithFallback(leftBatch)
+        const rightReceipts = await this.fetchTeamReadReceiptsWithFallback(rightBatch)
+
+        return [...leftReceipts, ...rightReceipts]
       }
 
       throw error
@@ -678,37 +2508,33 @@ class MessageStore {
     }
   }
 
-  async sendChatReadReceipts(conversationId: string) {
+  async sendChatReadReceipts(
+    conversationId: string,
+    options?: { bypassActiveConversation?: boolean }
+  ) {
     if (!this.canUseMessageService()) {
-      return
+      return { sent: false, incomingCount: 0, readableCount: 0 }
     }
 
-    const nim = nimStore.nim!
+    if (!options?.bypassActiveConversation && this.activeConversationId !== conversationId) {
+      return { sent: false, incomingCount: 0, readableCount: 0 }
+    }
+
     const current = this.messagesMap[conversationId]
 
     if (!current?.list.length) {
+      return { sent: false, incomingCount: 0, readableCount: 0 }
+    }
+
+    return this.sendReadReceiptsForMessages(conversationId, current.list)
+  }
+
+  async sendReadReceiptsForReceivedMessages(conversationId: string, messages: V2NIMMessage[]) {
+    if (!this.canUseMessageService() || this.activeConversationId !== conversationId) {
       return
     }
 
-    const incomingMessages = current.list.filter((message) => !message.isSelf)
-    const latestIncoming = incomingMessages[incomingMessages.length - 1]
-
-    if (!latestIncoming) {
-      return
-    }
-
-    if (latestIncoming.conversationType === 1) {
-      await nim.V2NIMMessageService.sendP2PMessageReceipt(latestIncoming)
-      return
-    }
-
-    const teamMessages = incomingMessages
-      .filter((message) => message.messageConfig?.readReceiptEnabled !== false)
-      .slice(-50)
-
-    if (teamMessages.length > 0) {
-      await nim.V2NIMMessageService.sendTeamMessageReceipts(teamMessages)
-    }
+    await this.sendReadReceiptsForMessages(conversationId, messages)
   }
 
   async refreshReadState(conversationId: string) {
@@ -724,7 +2550,7 @@ class MessageStore {
 
     const latestMessage = current.list[current.list.length - 1]
 
-    if (latestMessage.conversationType === 1) {
+    if (latestMessage.conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P) {
       await this.refreshP2PReadReceipt(conversationId)
       return
     }
@@ -733,8 +2559,7 @@ class MessageStore {
       .filter(
         (message) =>
           message.isSelf &&
-          message.sendingState === V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED &&
-          message.messageConfig?.readReceiptEnabled
+          message.sendingState === V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED
       )
       .slice(-50)
 
@@ -746,7 +2571,10 @@ class MessageStore {
       return
     }
 
-    await nimStore.nim.V2NIMMessageService.revokeMessage(message)
+    const revokeTime = Date.now()
+    const serverExtension = this.buildRevokeServerExtension(message, revokeTime)
+
+    await nimStore.nim.V2NIMMessageService.revokeMessage(message, { serverExtension })
     this.applyRevokeNotifications([
       {
         messageRefer: {
@@ -758,6 +2586,7 @@ class MessageStore {
           conversationType: message.conversationType,
           conversationId: message.conversationId
         },
+        serverExtension,
         revokeAccountId: nimStore.getLoginUser() || message.senderId,
         revokeType: 0
       } as V2NIMMessageRevokeNotification
@@ -770,12 +2599,101 @@ class MessageStore {
       return
     }
 
+    if (this.getRevokedText(message)) {
+      this.syncConversationPreview(message.conversationId)
+      return
+    }
+
     await nimStore.nim.V2NIMMessageService.deleteMessage(message)
-    this.deleteMessage(message.conversationId, this.getMessageKey(message))
+    this.deleteMessagesLocally([
+      {
+        conversationId: message.conversationId,
+        messageClientId: message.messageClientId,
+        messageServerId: message.messageServerId
+      }
+    ])
     await conversationStore.refreshConversations()
+    this.syncConversationPreview(message.conversationId)
+  }
+
+  async deleteRemoteMessages(messages: V2NIMMessage[]) {
+    if (!nimStore.nim || messages.length === 0) {
+      return
+    }
+
+    const deletedLocalMessages: V2NIMMessage[] = []
+    const remoteMessagesByConversationId = new Map<string, V2NIMMessage[]>()
+
+    messages.forEach((message) => {
+      if (this.getRevokedText(message)) {
+        return
+      }
+
+      if (
+        message.sendingState === V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_FAILED ||
+        !message.messageServerId
+      ) {
+        deletedLocalMessages.push(message)
+        return
+      }
+
+      const messagesInConversation =
+        remoteMessagesByConversationId.get(message.conversationId) || []
+      messagesInConversation.push(message)
+      remoteMessagesByConversationId.set(message.conversationId, messagesInConversation)
+    })
+
+    const deletedRemoteMessages: V2NIMMessage[] = []
+
+    for (const remoteMessages of remoteMessagesByConversationId.values()) {
+      for (const chunk of this.chunkMessages(remoteMessages, DELETE_MESSAGES_CHUNK_SIZE)) {
+        await nimStore.nim.V2NIMMessageService.deleteMessages(chunk)
+        deletedRemoteMessages.push(...chunk)
+      }
+    }
+
+    const deletedMessages = [...deletedLocalMessages, ...deletedRemoteMessages]
+
+    if (deletedMessages.length > 0) {
+      this.deleteMessagesLocally(
+        deletedMessages.map((message) => ({
+          conversationId: message.conversationId,
+          messageClientId: message.messageClientId,
+          messageServerId: message.messageServerId
+        }))
+      )
+      await conversationStore.refreshConversations()
+    }
+
+    const affectedConversationIds = new Set<string>()
+    messages.forEach((message) => affectedConversationIds.add(message.conversationId))
+    affectedConversationIds.forEach((conversationId) =>
+      this.syncConversationPreview(conversationId)
+    )
   }
 
   async loadPinnedMessages(conversationId: string) {
+    if (!this.canUseMessageService()) {
+      return []
+    }
+
+    const existingPromise = this.pinnedMessageLoadPromiseByConversationId.get(conversationId)
+
+    if (existingPromise) {
+      return existingPromise
+    }
+
+    const promise = this.loadPinnedMessagesFromSDK(conversationId)
+    this.pinnedMessageLoadPromiseByConversationId.set(conversationId, promise)
+
+    try {
+      return await promise
+    } finally {
+      this.pinnedMessageLoadPromiseByConversationId.delete(conversationId)
+    }
+  }
+
+  private async loadPinnedMessagesFromSDK(conversationId: string) {
     if (!this.canUseMessageService()) {
       return []
     }
@@ -794,7 +2712,10 @@ class MessageStore {
         pins.map((pin: V2NIMMessagePin) => pin.messageRefer)
       )
       this.addMessages(messages)
-      return messages
+      runInAction(() => {
+        this.removeRevokedPinnedMessages(conversationId)
+      })
+      return messages.filter((message) => !this.isRevokedRefer(conversationId, message))
     } catch (error) {
       if (this.isIllegalStateError(error)) {
         return []
@@ -818,7 +2739,7 @@ class MessageStore {
     await this.loadPinnedMessages(message.conversationId)
   }
 
-  async loadHistory(conversationId: string, limit = 50) {
+  async loadHistory(conversationId: string, limit = NATIVE_HISTORY_PAGE_SIZE) {
     if (!this.canUseMessageService()) {
       return []
     }
@@ -833,16 +2754,22 @@ class MessageStore {
     try {
       const messages = await nim.V2NIMMessageService.getMessageList({
         conversationId,
+        endTime: Date.now(),
         limit,
         direction: 0
       })
 
       runInAction(() => {
         const current = this.ensureConversationState(conversationId)
-        current.list = this.mergeMessages([], messages)
+        current.list = this.mergeServerMessagesWithLocalUnsent(conversationId, messages)
         current.isSync = true
         current.hasMore = messages.length >= limit
+        this.updateHistoryAnchor(conversationId, messages[messages.length - 1] || null, {
+          reset: true
+        })
       })
+
+      this.refreshHistoryBatchTeamReadReceipts(messages).catch(() => undefined)
 
       return messages
     } catch (error) {
@@ -859,7 +2786,7 @@ class MessageStore {
     }
   }
 
-  async loadMoreHistory(conversationId: string, limit = 50) {
+  async loadMoreHistory(conversationId: string, limit = NATIVE_HISTORY_PAGE_SIZE) {
     if (!this.canUseMessageService()) {
       return []
     }
@@ -876,10 +2803,14 @@ class MessageStore {
     })
 
     try {
-      const anchorMessage = current.list[0]
+      const anchorMessage =
+        current.historyAnchor ||
+        current.list.find((message) => !!message.messageServerId) ||
+        current.list[0]
       const messages = await nim.V2NIMMessageService.getMessageList({
         conversationId,
         anchorMessage,
+        endTime: anchorMessage.createTime,
         limit,
         direction: 0
       })
@@ -888,7 +2819,10 @@ class MessageStore {
         const latest = this.ensureConversationState(conversationId)
         latest.list = this.mergeMessages(latest.list, messages)
         latest.hasMore = messages.length >= limit
+        this.updateHistoryAnchor(conversationId, messages[messages.length - 1] || null)
       })
+
+      this.refreshHistoryBatchTeamReadReceipts(messages).catch(() => undefined)
 
       return messages
     } catch (error) {
@@ -905,13 +2839,16 @@ class MessageStore {
     }
   }
 
-  async sendMessage(conversationId: string, text: string) {
+  async sendMessage(conversationId: string, text: string, options?: TextMessageOptions) {
     if (!nimStore.nim || !text.trim()) {
       return
     }
 
-    const message = nimStore.nim.V2NIMMessageCreator.createTextMessage(text.trim())
-    return this.performSend(conversationId, message, () =>
+    const message = this.applyTextMessageOptions(
+      nimStore.nim.V2NIMMessageCreator.createTextMessage(text),
+      options
+    )
+    return this.performSend(conversationId, message, (_progress) =>
       nimStore.nim!.V2NIMMessageService.sendMessage(
         message,
         conversationId,
@@ -920,13 +2857,25 @@ class MessageStore {
     )
   }
 
-  async replyTextMessage(conversationId: string, text: string, replyToMessage: V2NIMMessage) {
+  async replyTextMessage(
+    conversationId: string,
+    text: string,
+    replyToMessage: V2NIMMessage,
+    options?: TextMessageOptions
+  ) {
     if (!nimStore.nim || !text.trim()) {
       return
     }
 
-    const message = nimStore.nim.V2NIMMessageCreator.createTextMessage(text.trim())
-    return this.performSend(conversationId, message, () =>
+    const message = this.applyTextMessageOptions(
+      {
+        ...nimStore.nim.V2NIMMessageCreator.createTextMessage(text),
+        threadReply: this.getMessageRefer(replyToMessage)
+      } as V2NIMMessage,
+      options
+    )
+
+    return this.performSend(conversationId, message, (_progress) =>
       nimStore.nim!.V2NIMMessageService.replyMessage(
         message,
         replyToMessage,
@@ -935,20 +2884,32 @@ class MessageStore {
     )
   }
 
-  async sendImageMessage(conversationId: string, imageUri: string, name?: string) {
+  async sendImageMessage(
+    conversationId: string,
+    imageUri: string,
+    name?: string,
+    options?: {
+      width?: number
+      height?: number
+    }
+  ) {
     if (!nimStore.nim) {
       return
     }
 
     const message = nimStore.nim.V2NIMMessageCreator.createImageMessage(
       imageUri,
-      name || 'image.jpg'
+      name || 'image.jpg',
+      undefined,
+      options?.width,
+      options?.height
     )
-    return this.performSend(conversationId, message, () =>
+    return this.performSend(conversationId, message, (progress) =>
       nimStore.nim!.V2NIMMessageService.sendMessage(
         message,
         conversationId,
-        this.buildSendParams(conversationId, message)
+        this.buildSendParams(conversationId, message),
+        progress
       )
     )
   }
@@ -961,6 +2922,7 @@ class MessageStore {
       duration?: number
       width?: number
       height?: number
+      previewUri?: string
     }
   ) {
     if (!nimStore.nim) {
@@ -976,12 +2938,19 @@ class MessageStore {
       options?.height
     )
 
-    return this.performSend(conversationId, message, () =>
-      nimStore.nim!.V2NIMMessageService.sendMessage(
-        message,
-        conversationId,
-        this.buildSendParams(conversationId, message)
-      )
+    return this.performSend(
+      conversationId,
+      message,
+      (progress) =>
+        nimStore.nim!.V2NIMMessageService.sendMessage(
+          message,
+          conversationId,
+          this.buildSendParams(conversationId, message),
+          progress
+        ),
+      {
+        videoUploadPreview: options?.previewUri
+      }
     )
   }
 
@@ -991,11 +2960,114 @@ class MessageStore {
     }
 
     const message = nimStore.nim.V2NIMMessageCreator.createFileMessage(fileUri, name || 'file')
-    return this.performSend(conversationId, message, () =>
+    return this.performSend(conversationId, message, (progress) =>
+      nimStore.nim!.V2NIMMessageService.sendMessage(
+        message,
+        conversationId,
+        this.buildSendParams(conversationId, message),
+        progress
+      )
+    )
+  }
+
+  async sendAudioMessage(
+    conversationId: string,
+    audioUri: string,
+    options?: {
+      name?: string
+      duration?: number
+      debugTraceId?: string
+    }
+  ) {
+    if (!nimStore.nim) {
+      logIOSVoiceDebug('store.audio.create.skip.noNim', {
+        traceId: options?.debugTraceId,
+        conversationId,
+        audioUri,
+        name: options?.name,
+        duration: options?.duration
+      })
+      return
+    }
+
+    logIOSVoiceDebug('store.audio.create.start', {
+      traceId: options?.debugTraceId,
+      conversationId,
+      audioUri,
+      name: options?.name,
+      duration: options?.duration
+    })
+
+    const message = nimStore.nim.V2NIMMessageCreator.createAudioMessage(
+      audioUri,
+      options?.name || 'audio.m4a',
+      undefined,
+      options?.duration
+    )
+
+    logIOSVoiceDebug('store.audio.create.done', {
+      traceId: options?.debugTraceId,
+      conversationId,
+      message: getAudioMessageDebugPayload(message)
+    })
+
+    return this.performSend(
+      conversationId,
+      message,
+      (progress) =>
+        nimStore.nim!.V2NIMMessageService.sendMessage(
+          message,
+          conversationId,
+          this.buildSendParams(conversationId, message),
+          progress
+        ),
+      {
+        debugTraceId: options?.debugTraceId
+      }
+    )
+  }
+
+  async sendLocationMessage(
+    conversationId: string,
+    latitude: number,
+    longitude: number,
+    address: string,
+    title?: string
+  ) {
+    if (!nimStore.nim) {
+      return
+    }
+
+    const normalizedAddress = address.trim()
+    const normalizedTitle =
+      title?.trim() || normalizedAddress.split(/\s+/).filter(Boolean)[0] || '位置'
+    const message = nimStore.nim.V2NIMMessageCreator.createLocationMessage(
+      latitude,
+      longitude,
+      normalizedAddress
+    )
+    message.text = normalizedTitle
+
+    return this.performSend(conversationId, message, (_progress) =>
       nimStore.nim!.V2NIMMessageService.sendMessage(
         message,
         conversationId,
         this.buildSendParams(conversationId, message)
+      )
+    )
+  }
+
+  async sendForwardComment(conversationId: string, comment = '') {
+    if (!nimStore.nim || !comment.trim()) {
+      return null
+    }
+
+    const commentMessage = nimStore.nim.V2NIMMessageCreator.createTextMessage(comment.trim())
+    return this.performSend(conversationId, commentMessage, (_progress) =>
+      nimStore.nim!.V2NIMMessageService.sendMessage(
+        commentMessage,
+        conversationId,
+        this.buildSendParams(conversationId, commentMessage)
       )
     )
   }
@@ -1006,128 +3078,283 @@ class MessageStore {
     }
 
     const key = this.getMessageKey(message)
-    const resendWithDraft = async (
-      draftMessage: V2NIMMessage,
-      sender: () => Promise<{ message: V2NIMMessage }>
-    ) => {
-      try {
-        const nextMessage = await this.performSend(message.conversationId, draftMessage, sender)
-        this.deleteMessage(message.conversationId, key)
-        return nextMessage
-      } catch (error) {
-        this.deleteMessage(message.conversationId, this.getMessageKey(draftMessage))
-        throw error
-      }
+    const currentMessage = this.getMessageById(message.conversationId, key)
+
+    if (!currentMessage) {
+      return null
     }
 
-    const replyToMessage = this.getMessageByRefer(message.conversationId, message.threadReply)
-
-    if (message.threadReply && !replyToMessage) {
-      throw new Error('回复的原消息不存在，无法重发')
+    if (
+      currentMessage.sendingState !== V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_FAILED ||
+      this.isMessageResending(message.conversationId, key)
+    ) {
+      return currentMessage
     }
 
-    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT) {
-      const draftMessage = nimStore.nim.V2NIMMessageCreator.createTextMessage(message.text || '')
-      return resendWithDraft(draftMessage, () =>
-        replyToMessage
-          ? nimStore.nim!.V2NIMMessageService.replyMessage(
-              draftMessage,
-              replyToMessage,
-              this.buildSendParams(message.conversationId, draftMessage)
+    this.setMessageResending(message.conversationId, key, true)
+    try {
+      const resendWithDraft = async (
+        draftMessage: V2NIMMessage,
+        sender: (progress: (percentage: number) => void) => Promise<SendMessageResult>
+      ) => {
+        const draftMessageKey = this.getMessageKey(draftMessage)
+
+        this.updateMessageInPlace(message.conversationId, key, (currentMessage) => ({
+          ...currentMessage,
+          sendingState: V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SENDING
+        }))
+
+        if (this.isAttachmentUploadMessage(draftMessage)) {
+          this.setAttachmentUploadProgress(message.conversationId, key, 0)
+        }
+
+        try {
+          this.ensureSendReady()
+          const result = await sender((percentage) => {
+            this.setAttachmentUploadProgress(message.conversationId, key, percentage)
+            this.setAttachmentUploadProgress(message.conversationId, draftMessageKey, percentage)
+          })
+          const sendResultAntispamReason = this.getSendResultAntispamReason(result)
+
+          if (sendResultAntispamReason) {
+            const antispamError = createAntispamSendFailureError(
+              sendResultAntispamReason,
+              result.antispamResult
             )
-          : nimStore.nim!.V2NIMMessageService.sendMessage(
-              draftMessage,
-              message.conversationId,
-              this.buildSendParams(message.conversationId, draftMessage)
-            )
-      )
-    }
+            this.applySendFailure(message.conversationId, key, {
+              antispamResult: result.antispamResult
+            })
+            this.clearAttachmentUploadProgress(message.conversationId, key)
+            this.clearAttachmentUploadProgress(message.conversationId, draftMessageKey)
+            throw antispamError
+          }
 
-    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_IMAGE) {
-      const attachment = message.attachment as V2NIMMessageImageAttachment | undefined
-      const source = attachment?.path || attachment?.url
+          if (hasSendFailureResult(result.message)) {
+            const sendFailureError = createSendFailureError(result.message, result)
+            this.applySendFailure(message.conversationId, key, sendFailureError)
+            this.clearAttachmentUploadProgress(message.conversationId, key)
+            this.clearAttachmentUploadProgress(message.conversationId, draftMessageKey)
+            throw sendFailureError
+          }
 
-      if (!source) {
-        throw new Error('原图片不存在，无法重发')
+          const sentMessage = result.message
+          const nextMessage = {
+            ...result.message,
+            messageClientId: message.messageClientId || result.message.messageClientId,
+            messageServerId: result.message.messageServerId || message.messageServerId
+          } as V2NIMMessage
+
+          this.migrateAntispamReason(message.conversationId, message, nextMessage)
+          this.clearAttachmentUploadProgress(message.conversationId, key)
+          this.clearAttachmentUploadProgress(message.conversationId, draftMessageKey)
+          this.replaceMessageAndSort(message.conversationId, key, nextMessage)
+          if (
+            nextMessage.conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM &&
+            nextMessage.sendingState ===
+              V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED
+          ) {
+            this.refreshTeamReadReceipts([sentMessage])
+              .then((receipts) => {
+                receipts.forEach((receipt) => {
+                  this.applyTeamReadReceiptAliases([sentMessage, nextMessage], receipt)
+                })
+              })
+              .catch(() => undefined)
+          }
+          return nextMessage
+        } catch (error) {
+          if (
+            !this.isAntispamBlocked(this.getMessageById(message.conversationId, key) || message)
+          ) {
+            this.applySendFailure(message.conversationId, key, error)
+          }
+          this.clearAttachmentUploadProgress(message.conversationId, key)
+          this.clearAttachmentUploadProgress(message.conversationId, draftMessageKey)
+          throw error
+        }
       }
 
-      const draftMessage = nimStore.nim.V2NIMMessageCreator.createImageMessage(
-        source,
-        attachment?.name || 'image.jpg'
-      )
-      return resendWithDraft(draftMessage, () =>
-        nimStore.nim!.V2NIMMessageService.sendMessage(
-          draftMessage,
-          message.conversationId,
-          this.buildSendParams(message.conversationId, draftMessage)
-        )
-      )
-    }
+      const replyToMessage = this.getMessageByRefer(message.conversationId, message.threadReply)
 
-    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_VIDEO) {
-      const attachment = message.attachment as V2NIMMessageFileAttachment | undefined
-      const source = attachment?.path || attachment?.url
-
-      if (!source) {
-        throw new Error('原视频不存在，无法重发')
+      if (message.threadReply && !replyToMessage) {
+        throw new Error(translateCurrentApp('commonReplySourceMissing'))
       }
 
-      const draftMessage = nimStore.nim.V2NIMMessageCreator.createVideoMessage(
-        source,
-        attachment?.name || 'video.mp4'
-      )
-      return resendWithDraft(draftMessage, () =>
-        nimStore.nim!.V2NIMMessageService.sendMessage(
-          draftMessage,
-          message.conversationId,
-          this.buildSendParams(message.conversationId, draftMessage)
+      if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT) {
+        const draftMessage = this.applyTextMessageOptions(
+          {
+            ...nimStore.nim.V2NIMMessageCreator.createTextMessage(message.text || ''),
+            threadReply: message.threadReply
+          } as V2NIMMessage,
+          {
+            serverExtension: message.serverExtension,
+            mentions: parseMentionExtension(message.serverExtension)
+          }
         )
-      )
-    }
 
-    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_FILE) {
-      const attachment = message.attachment as V2NIMMessageFileAttachment | undefined
-      const source = attachment?.path || attachment?.url
-
-      if (!source) {
-        throw new Error('原文件不存在，无法重发')
+        return resendWithDraft(draftMessage, (_progress) =>
+          replyToMessage
+            ? nimStore.nim!.V2NIMMessageService.replyMessage(
+                draftMessage,
+                replyToMessage,
+                this.buildSendParams(message.conversationId, draftMessage)
+              )
+            : nimStore.nim!.V2NIMMessageService.sendMessage(
+                draftMessage,
+                message.conversationId,
+                this.buildSendParams(message.conversationId, draftMessage)
+              )
+        )
       }
 
-      const draftMessage = nimStore.nim.V2NIMMessageCreator.createFileMessage(
-        source,
-        attachment?.name || 'file'
-      )
-      return resendWithDraft(draftMessage, () =>
-        nimStore.nim!.V2NIMMessageService.sendMessage(
-          draftMessage,
-          message.conversationId,
-          this.buildSendParams(message.conversationId, draftMessage)
+      if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_IMAGE) {
+        const attachment = message.attachment as V2NIMMessageImageAttachment | undefined
+        const source = attachment?.path || attachment?.url
+
+        if (!source) {
+          throw new Error(translateCurrentApp('commonOriginalImageMissing'))
+        }
+
+        const draftMessage = nimStore.nim.V2NIMMessageCreator.createImageMessage(
+          source,
+          attachment?.name || 'image.jpg',
+          undefined,
+          attachment?.width,
+          attachment?.height
         )
-      )
-    }
-
-    if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_AUDIO) {
-      const attachment = message.attachment as V2NIMMessageAudioAttachment | undefined
-      const source = attachment?.path || attachment?.url
-
-      if (!source) {
-        throw new Error('原语音不存在，无法重发')
+        return resendWithDraft(draftMessage, (progress) =>
+          nimStore.nim!.V2NIMMessageService.sendMessage(
+            draftMessage,
+            message.conversationId,
+            this.buildSendParams(message.conversationId, draftMessage),
+            progress
+          )
+        )
       }
 
-      const draftMessage = nimStore.nim.V2NIMMessageCreator.createAudioMessage(
-        source,
-        attachment?.name || 'audio.aac'
-      )
-      return resendWithDraft(draftMessage, () =>
-        nimStore.nim!.V2NIMMessageService.sendMessage(
-          draftMessage,
-          message.conversationId,
-          this.buildSendParams(message.conversationId, draftMessage)
-        )
-      )
-    }
+      if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_VIDEO) {
+        const attachment = message.attachment as V2NIMMessageFileAttachment | undefined
+        const source = attachment?.path || attachment?.url
 
-    return null
+        if (!source) {
+          throw new Error(translateCurrentApp('commonOriginalVideoMissing'))
+        }
+
+        const draftMessage = nimStore.nim.V2NIMMessageCreator.createVideoMessage(
+          source,
+          attachment?.name || 'video.mp4'
+        )
+        return resendWithDraft(draftMessage, (progress) =>
+          nimStore.nim!.V2NIMMessageService.sendMessage(
+            draftMessage,
+            message.conversationId,
+            this.buildSendParams(message.conversationId, draftMessage),
+            progress
+          )
+        )
+      }
+
+      if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_FILE) {
+        const attachment = message.attachment as V2NIMMessageFileAttachment | undefined
+        const source = attachment?.path || attachment?.url
+
+        if (!source) {
+          throw new Error(translateCurrentApp('commonOriginalFileMissing'))
+        }
+
+        const draftMessage = nimStore.nim.V2NIMMessageCreator.createFileMessage(
+          source,
+          attachment?.name || 'file'
+        )
+        return resendWithDraft(draftMessage, (progress) =>
+          nimStore.nim!.V2NIMMessageService.sendMessage(
+            draftMessage,
+            message.conversationId,
+            this.buildSendParams(message.conversationId, draftMessage),
+            progress
+          )
+        )
+      }
+
+      if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_AUDIO) {
+        const attachment = message.attachment as V2NIMMessageAudioAttachment | undefined
+        const source = attachment?.path || attachment?.url
+
+        if (!source) {
+          throw new Error(translateCurrentApp('commonOriginalAudioMissing'))
+        }
+
+        const draftMessage = nimStore.nim.V2NIMMessageCreator.createAudioMessage(
+          source,
+          attachment?.name || 'audio.m4a',
+          undefined,
+          attachment?.duration
+        )
+        return resendWithDraft(draftMessage, (progress) =>
+          nimStore.nim!.V2NIMMessageService.sendMessage(
+            draftMessage,
+            message.conversationId,
+            this.buildSendParams(message.conversationId, draftMessage),
+            progress
+          )
+        )
+      }
+
+      if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_LOCATION) {
+        const attachment = message.attachment as V2NIMMessageLocationAttachment | undefined
+
+        if (
+          typeof attachment?.latitude !== 'number' ||
+          typeof attachment?.longitude !== 'number' ||
+          !attachment.address
+        ) {
+          throw new Error(translateCurrentApp('commonOriginalLocationMissing'))
+        }
+
+        const draftMessage = nimStore.nim.V2NIMMessageCreator.createLocationMessage(
+          attachment.latitude,
+          attachment.longitude,
+          attachment.address
+        )
+        draftMessage.text = message.text?.trim() || attachment.address?.trim() || '位置'
+        return resendWithDraft(draftMessage, (_progress) =>
+          nimStore.nim!.V2NIMMessageService.sendMessage(
+            draftMessage,
+            message.conversationId,
+            this.buildSendParams(message.conversationId, draftMessage)
+          )
+        )
+      }
+
+      if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_CUSTOM) {
+        const mergedForwardData = parseStandardMergedForwardData(message)
+
+        if (!mergedForwardData) {
+          return null
+        }
+
+        const payload = {
+          type: MERGED_FORWARD_CUSTOM_TYPE,
+          data: mergedForwardData
+        }
+        const draftMessage = nimStore.nim.V2NIMMessageCreator.createCustomMessage(
+          message.text || translateCurrentApp('commonMergedChatHistory'),
+          JSON.stringify(payload)
+        )
+
+        return resendWithDraft(draftMessage, (_progress) =>
+          nimStore.nim!.V2NIMMessageService.sendMessage(
+            draftMessage,
+            message.conversationId,
+            this.buildSendParams(message.conversationId, draftMessage)
+          )
+        )
+      }
+
+      return null
+    } finally {
+      this.setMessageResending(message.conversationId, key, false)
+    }
   }
 
   async forwardMessage(message: V2NIMMessage, conversationId: string, comment = '') {
@@ -1135,32 +3362,53 @@ class MessageStore {
       return null
     }
 
-    if (comment.trim()) {
-      const commentMessage = nimStore.nim.V2NIMMessageCreator.createTextMessage(comment.trim())
-      await this.performSend(conversationId, commentMessage, () =>
-        nimStore.nim!.V2NIMMessageService.sendMessage(
-          commentMessage,
-          conversationId,
-          this.buildSendParams(conversationId, commentMessage)
-        )
-      )
-    }
-
     const forwardMessage = nimStore.nim.V2NIMMessageCreator.createForwardMessage(message)
 
     if (!forwardMessage) {
-      throw new Error('该消息暂不支持转发')
+      throw new Error(translateCurrentApp('commonMessageForwardUnsupported'))
     }
 
-    const result = await this.performSend(conversationId, forwardMessage, () =>
-      nimStore.nim!.V2NIMMessageService.sendMessage(
-        forwardMessage,
-        conversationId,
-        this.buildSendParams(conversationId, forwardMessage)
+    this.normalizeForwardMessage(forwardMessage)
+
+    let result: V2NIMMessage | null = null
+    let sendError: unknown = null
+
+    try {
+      result = await this.performSend(conversationId, forwardMessage, () =>
+        nimStore.nim!.V2NIMMessageService.sendMessage(
+          forwardMessage,
+          conversationId,
+          this.buildSendParams(conversationId, forwardMessage)
+        )
       )
-    )
-    await this.rememberForwardConversation(conversationId)
+      await this.rememberForwardConversation(conversationId)
+    } catch (error) {
+      sendError = error
+    }
+
+    if (comment.trim()) {
+      try {
+        await this.sendForwardComment(conversationId, comment)
+      } catch (error) {
+        sendError = sendError || error
+      }
+    }
+
+    if (sendError) {
+      throw sendError
+    }
+
     return result
+  }
+
+  async forwardCollectionMessage(message: V2NIMMessage, conversationId: string, comment = '') {
+    const forwardSource = this.createCollectionForwardSourceMessage(message)
+
+    if (!forwardSource) {
+      throw new Error(translateCurrentApp('commonMessageForwardUnsupported'))
+    }
+
+    return this.forwardMessage(forwardSource, conversationId, comment)
   }
 
   async forwardMessages(messages: V2NIMMessage[], conversationId: string, comment = '') {
@@ -1168,80 +3416,253 @@ class MessageStore {
       return []
     }
 
-    const results: V2NIMMessage[] = []
-
-    if (comment.trim()) {
-      const commentMessage = nimStore.nim.V2NIMMessageCreator.createTextMessage(comment.trim())
-      const sentComment = await this.performSend(conversationId, commentMessage, () =>
-        nimStore.nim!.V2NIMMessageService.sendMessage(
-          commentMessage,
-          conversationId,
-          this.buildSendParams(conversationId, commentMessage)
-        )
-      )
-      results.push(sentComment)
-    }
-
-    for (const message of messages) {
-      const forwardMessage = nimStore.nim.V2NIMMessageCreator.createForwardMessage(message)
+    const forwardMessages = messages.map((message) => {
+      const forwardMessage = nimStore.nim!.V2NIMMessageCreator.createForwardMessage(message)
 
       if (!forwardMessage) {
-        throw new Error('该消息暂不支持转发')
+        throw new Error(translateCurrentApp('commonMessageForwardUnsupported'))
       }
 
-      const sentMessage = await this.performSend(conversationId, forwardMessage, () =>
-        nimStore.nim!.V2NIMMessageService.sendMessage(
-          forwardMessage,
-          conversationId,
-          this.buildSendParams(conversationId, forwardMessage)
+      this.normalizeForwardMessage(forwardMessage)
+      return forwardMessage
+    })
+
+    const results: V2NIMMessage[] = []
+    let sendError: unknown = null
+
+    const sendResults = await Promise.allSettled(
+      forwardMessages.map((forwardMessage) =>
+        this.performSend(conversationId, forwardMessage, () =>
+          nimStore.nim!.V2NIMMessageService.sendMessage(
+            forwardMessage,
+            conversationId,
+            this.buildSendParams(conversationId, forwardMessage)
+          )
         )
       )
-      results.push(sentMessage)
+    )
+
+    sendResults.forEach((sendResult) => {
+      if (sendResult.status === 'fulfilled') {
+        results.push(sendResult.value)
+        return
+      }
+
+      sendError = sendError || sendResult.reason
+    })
+
+    if (!sendError) {
+      await this.rememberForwardConversation(conversationId)
     }
 
-    await this.rememberForwardConversation(conversationId)
+    if (comment.trim()) {
+      try {
+        const sentComment = await this.sendForwardComment(conversationId, comment)
+        if (sentComment) {
+          results.push(sentComment)
+        }
+      } catch (error) {
+        sendError = sendError || error
+      }
+    }
+
+    if (sendError) {
+      throw sendError
+    }
+
     return results
   }
 
   async sendMergedForwardMessage(
     conversationId: string,
-    payload: MergedForwardPayload,
+    sourceMessages: V2NIMMessage[],
+    sourceConversationId: string,
+    sourceTitle: string,
     comment = ''
   ) {
     if (!nimStore.nim) {
       return null
     }
 
-    if (comment.trim()) {
-      const commentMessage = nimStore.nim.V2NIMMessageCreator.createTextMessage(comment.trim())
-      await this.performSend(conversationId, commentMessage, () =>
+    const mergedMessage = await this.createStandardMergedForwardMessage(
+      sourceMessages,
+      sourceConversationId,
+      sourceTitle
+    )
+
+    let result: V2NIMMessage | null = null
+    let sendError: unknown = null
+
+    try {
+      result = await this.performSend(conversationId, mergedMessage, () =>
         nimStore.nim!.V2NIMMessageService.sendMessage(
-          commentMessage,
+          mergedMessage,
           conversationId,
-          this.buildSendParams(conversationId, commentMessage)
+          this.buildSendParams(conversationId, mergedMessage)
         )
       )
+      await this.rememberForwardConversation(conversationId)
+    } catch (error) {
+      sendError = error
     }
 
-    const attachment = {
-      ...payload,
-      raw: JSON.stringify(payload)
-    } as V2NIMMessageCustomAttachment
-    const mergedMessage = nimStore.nim.V2NIMMessageCreator.createCustomMessageWithAttachment(
-      attachment,
-      MERGED_FORWARD_SUBTYPE
-    )
-    mergedMessage.text = '[聊天记录]'
+    if (comment.trim()) {
+      try {
+        await this.sendForwardComment(conversationId, comment)
+      } catch (error) {
+        sendError = sendError || error
+      }
+    }
 
-    const result = await this.performSend(conversationId, mergedMessage, () =>
-      nimStore.nim!.V2NIMMessageService.sendMessage(
-        mergedMessage,
-        conversationId,
-        this.buildSendParams(conversationId, mergedMessage)
-      )
-    )
-    await this.rememberForwardConversation(conversationId)
+    if (sendError) {
+      throw sendError
+    }
+
     return result
+  }
+
+  private getMergedForwardSenderName(message: V2NIMMessage) {
+    const teamId =
+      nimStore.nim?.V2NIMConversationIdUtil.parseConversationType(message.conversationId) === 2
+        ? nimStore.nim?.V2NIMConversationIdUtil.parseConversationTargetId(message.conversationId)
+        : undefined
+
+    return (
+      imStoreV2Bridge.rootStore?.uiStore.getAppellation({
+        account: message.senderId,
+        teamId,
+        ignoreAlias: true
+      }) || message.senderId
+    )
+  }
+
+  private getMergedForwardSenderAvatar(message: V2NIMMessage) {
+    return imStoreV2Bridge.rootStore?.userStore.users.get(message.senderId)?.avatar || ''
+  }
+
+  private stripMergedForwardServerExtension(message: V2NIMMessage) {
+    try {
+      const extension = JSON.parse(message.serverExtension || '{}') as Record<string, unknown>
+      delete extension.yxReplyMsg
+      delete extension.yxAitMsg
+      return extension
+    } catch {
+      return {}
+    }
+  }
+
+  private buildMergedForwardHeader(messageCount: number) {
+    return JSON.stringify({
+      version: 1,
+      terminal: 'rn',
+      sdk_version: 'nim-web-sdk-ng',
+      app_version: '10.0.0-beta',
+      message_count: messageCount
+    })
+  }
+
+  private serializeMergedForwardMessages(messages: V2NIMMessage[]) {
+    if (!nimStore.nim) {
+      throw new Error('NIM 未初始化')
+    }
+
+    const sortedMessages = messages
+      .slice()
+      .sort((left, right) => left.createTime - right.createTime)
+    const serializedMessages = sortedMessages.map((message) => {
+      const originalServerExtension = message.serverExtension
+      const extension = this.stripMergedForwardServerExtension(message)
+      extension.mergedMessageNickKey = this.getMergedForwardSenderName(message)
+      extension.mergedMessageAvatarKey = this.getMergedForwardSenderAvatar(message)
+      message.serverExtension = JSON.stringify(extension)
+
+      const serialized = nimStore.nim!.V2NIMMessageConverter.messageSerialization(message)
+      message.serverExtension = originalServerExtension
+
+      if (!serialized) {
+        throw new Error('合并转发消息序列化失败')
+      }
+
+      return serialized
+    })
+
+    return [this.buildMergedForwardHeader(serializedMessages.length), ...serializedMessages].join(
+      '\n'
+    )
+  }
+
+  private buildMergedForwardAbstracts(messages: V2NIMMessage[]): MultiForwardAbstract[] {
+    return messages
+      .slice()
+      .sort((left, right) => left.createTime - right.createTime)
+      .slice(0, 3)
+      .map((message) => ({
+        senderNick: this.getMergedForwardSenderName(message),
+        content: getForwardPreview(message, 'merged'),
+        userAccId: message.senderId
+      }))
+  }
+
+  private async uploadMergedForwardContent(content: string) {
+    if (!nimStore.nim) {
+      throw new Error('NIM 未初始化')
+    }
+
+    const tempUri = `${FileSystem.cacheDirectory}merged-forward-${Date.now()}.txt`
+    await FileSystem.writeAsStringAsync(tempUri, content)
+
+    try {
+      const task = nimStore.nim.V2NIMStorageService.createUploadFileTask({
+        fileObj: tempUri
+      })
+      const url = await nimStore.nim.V2NIMStorageService.uploadFile(task, () => undefined)
+      return {
+        url,
+        md5: CryptoJS.MD5(content).toString()
+      }
+    } finally {
+      try {
+        await FileSystem.deleteAsync(tempUri, { idempotent: true })
+      } catch {
+        // noop
+      }
+    }
+  }
+
+  private async createStandardMergedForwardMessage(
+    sourceMessages: V2NIMMessage[],
+    sourceConversationId: string,
+    sourceTitle: string
+  ) {
+    if (!nimStore.nim || sourceMessages.length === 0) {
+      throw new Error('未找到可转发的消息')
+    }
+
+    const serializedContent = this.serializeMergedForwardMessages(sourceMessages)
+    const uploaded = await this.uploadMergedForwardContent(serializedContent)
+    const depth =
+      Math.max(
+        0,
+        ...sourceMessages.map((message) => parseStandardMergedForwardData(message)?.depth || 0)
+      ) + 1
+    const payload = {
+      type: MERGED_FORWARD_CUSTOM_TYPE,
+      data: {
+        sessionId:
+          nimStore.nim.V2NIMConversationIdUtil.parseConversationTargetId(sourceConversationId) ||
+          sourceConversationId,
+        sessionName: sourceTitle,
+        url: uploaded.url,
+        md5: uploaded.md5,
+        depth,
+        abstracts: this.buildMergedForwardAbstracts(sourceMessages)
+      }
+    }
+
+    return nimStore.nim.V2NIMMessageCreator.createCustomMessage(
+      translateCurrentApp('commonMergedChatHistory'),
+      JSON.stringify(payload)
+    )
   }
 
   async loadRecentForwardConversations() {
@@ -1250,13 +3671,23 @@ class MessageStore {
   }
 
   syncMessages(conversationId: string, messages: V2NIMMessage[]) {
+    const mergedMessages = this.mergeServerMessagesWithLocalUnsent(conversationId, messages)
+
     runInAction(() => {
+      const previous = this.messagesMap[conversationId]
+      const candidateAnchor = messages[messages.length - 1] || null
+      const historyAnchor = this.pickOlderHistoryAnchor(
+        previous?.historyAnchor || null,
+        candidateAnchor
+      )
+
       this.messagesMap[conversationId] = {
-        list: this.mergeMessages([], messages),
+        list: mergedMessages,
         isSync: true,
         loading: false,
         loadingMore: false,
-        hasMore: messages.length >= 50
+        hasMore: messages.length >= 50,
+        historyAnchor
       }
     })
   }
@@ -1267,22 +3698,65 @@ class MessageStore {
       delete this.p2pReceiptMap[conversationId]
       delete this.teamReceiptMap[conversationId]
       delete this.revokedMessageMap[conversationId]
+      delete this.revokedMessageTimeMap[conversationId]
       delete this.pinnedMessageMap[conversationId]
       delete this.antispamMessageMap[conversationId]
+      delete this.sentReadReceiptMap[conversationId]
+      delete this.attachmentUploadProgressMap[conversationId]
+      delete this.videoUploadPreviewMap[conversationId]
+      delete this.replySourceMessageMap[conversationId]
+    })
+    this.pinnedMessageLoadPromiseByConversationId.delete(conversationId)
+  }
+
+  deleteMessagesLocally(messageRefs: MessageDeleteRefer[]) {
+    if (messageRefs.length === 0) {
+      return
+    }
+
+    const messageKeysByConversationId = new Map<string, Set<string>>()
+
+    messageRefs.forEach((refer) => {
+      const keys = this.getMessageReferKeys(refer)
+      if (keys.length === 0) {
+        return
+      }
+
+      const conversationKeys = messageKeysByConversationId.get(refer.conversationId) || new Set()
+      keys.forEach((key) => conversationKeys.add(key))
+      messageKeysByConversationId.set(refer.conversationId, conversationKeys)
+    })
+
+    if (messageKeysByConversationId.size === 0) {
+      return
+    }
+
+    runInAction(() => {
+      messageKeysByConversationId.forEach((messageKeys, conversationId) => {
+        const current = this.messagesMap[conversationId]
+        if (current) {
+          current.list = current.list.filter(
+            (message) => !messageKeys.has(this.getMessageKey(message))
+          )
+        }
+
+        messageKeys.forEach((messageKey) => {
+          delete this.antispamMessageMap[conversationId]?.[messageKey]
+          delete this.attachmentUploadProgressMap[conversationId]?.[messageKey]
+          delete this.videoUploadPreviewMap[conversationId]?.[messageKey]
+        })
+      })
+    })
+
+    messageKeysByConversationId.forEach((_, conversationId) => {
+      this.syncConversationPreview(conversationId)
     })
   }
 
   deleteMessage(conversationId: string, messageId: string) {
-    runInAction(() => {
-      const current = this.messagesMap[conversationId]
-      if (current) {
-        current.list = current.list.filter((message) => this.getMessageKey(message) !== messageId)
-      }
-
-      delete this.antispamMessageMap[conversationId]?.[messageId]
-    })
-
-    this.syncConversationPreview(conversationId)
+    this.deleteMessagesLocally([
+      { conversationId, messageClientId: messageId, messageServerId: messageId }
+    ])
   }
 }
 

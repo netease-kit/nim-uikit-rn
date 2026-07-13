@@ -1,28 +1,45 @@
-import { Stack, useLocalSearchParams } from 'expo-router'
+import { Image } from 'expo-image'
+import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React from 'react'
-import { Alert, Linking, StyleSheet, View } from 'react-native'
+import { Linking, Platform, Pressable, StyleSheet, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
-import {
-  UIKitActionPill,
-  UIKitChatComposerShell,
-  UIKitChatEmptyState,
-  UIKitChatHeaderTitle
-} from '@/src/NEUIKit/rn'
-import { conversationStore, messageStore } from '@/stores'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
+import { UIKitChatEmptyState } from '@/src/NEUIKit/rn'
+import { messageStore } from '@/stores'
+import { getAmapStaticMapUrl, isValidMapCoordinate, resolveLocationText } from '@/utils/amap'
 import { V2NIMMessageLocationAttachment } from '@/utils/nim-sdk'
 
-function formatTimestamp(timestamp?: number) {
-  if (!timestamp) {
-    return ''
+function encodeUrlText(text: string) {
+  return encodeURIComponent(text).replace(/%20/g, '+')
+}
+
+async function openFirstAvailable(urls: string[]) {
+  for (const url of urls) {
+    try {
+      const canOpen = await Linking.canOpenURL(url)
+
+      if (!canOpen) {
+        continue
+      }
+
+      await Linking.openURL(url)
+      return true
+    } catch {
+      continue
+    }
   }
 
-  return new Date(timestamp).toLocaleString()
+  return false
 }
 
 const LocationDetailScreen = observer(() => {
+  const { t } = useAppTranslation()
+  const insets = useSafeAreaInsets()
   const { conversationId, messageId, address, latitude, longitude } = useLocalSearchParams<{
     conversationId?: string
     messageId?: string
@@ -33,7 +50,6 @@ const LocationDetailScreen = observer(() => {
   const resolvedConversationId = typeof conversationId === 'string' ? conversationId : ''
   const resolvedMessageId = typeof messageId === 'string' ? messageId : ''
   const message = messageStore.getMessageById(resolvedConversationId, resolvedMessageId)
-  const conversation = conversationStore.getConversation(resolvedConversationId)
   const resolvedAddress = typeof address === 'string' ? address : ''
   const resolvedLatitude = typeof latitude === 'string' ? Number(latitude) : undefined
   const resolvedLongitude = typeof longitude === 'string' ? Number(longitude) : undefined
@@ -46,89 +62,106 @@ const LocationDetailScreen = observer(() => {
           longitude: resolvedLongitude || 0
         }
       : undefined)
-  const placeholder = conversation?.name ? `发送给 ${conversation.name}` : '发送给 当前会话'
+  const locationText = resolveLocationText(message?.text, attachment?.address)
+  const hasCoordinate = isValidMapCoordinate(attachment?.latitude, attachment?.longitude)
+  const mapImageUrl = getAmapStaticMapUrl(attachment?.latitude, attachment?.longitude, '750*1000')
 
-  const openMap = async () => {
-    if (!attachment) {
+  const openNavigation = async () => {
+    if (!attachment || !hasCoordinate) {
+      toast.alert(
+        t('locationDetailNavigationUnavailable' as never),
+        t('locationDetailCoordinateUnavailable' as never)
+      )
       return
     }
 
-    const url = `https://www.google.com/maps/search/?api=1&query=${attachment.latitude},${attachment.longitude}`
-    const canOpen = await Linking.canOpenURL(url)
+    const title = locationText.title || attachment.address || t('commonLocationTitle' as never)
+    const encodedTitle = encodeUrlText(title)
+    const latitudeValue = attachment.latitude
+    const longitudeValue = attachment.longitude
+    const backScheme = 'neteaseyunxinimdemo'
+    const amapUrl =
+      Platform.OS === 'ios'
+        ? `iosamap://viewMap?sourceApplication=yunxin_im&backScheme=${backScheme}&poiname=${encodedTitle}&lat=${latitudeValue}&lon=${longitudeValue}&dev=1`
+        : `androidamap://viewMap?sourceApplication=NIMUIKit&poiname=${encodedTitle}&lat=${latitudeValue}&lon=${longitudeValue}&dev=0`
+    const tencentUrl = `qqmap://map/marker?marker=coord:${latitudeValue},${longitudeValue};title:${encodedTitle}`
+    const amapWebUrl = `https://uri.amap.com/marker?position=${longitudeValue},${latitudeValue}&name=${encodedTitle}&src=NIMUIKit&coordinate=gaode&callnative=1`
+    const appleMapsUrl =
+      Platform.OS === 'ios'
+        ? `http://maps.apple.com/?ll=${latitudeValue},${longitudeValue}&q=${encodedTitle}`
+        : ''
+    const candidateUrls = [amapUrl, tencentUrl, appleMapsUrl, amapWebUrl].filter(Boolean)
 
-    if (!canOpen) {
-      Alert.alert('打开失败', '当前设备无法打开地图')
-      return
+    const opened = await openFirstAvailable(candidateUrls)
+
+    if (!opened) {
+      toast.alert(
+        t('locationDetailOpenFailed' as never),
+        t('locationDetailMapUnavailable' as never)
+      )
     }
-
-    await Linking.openURL(url)
   }
 
   return (
     <ThemedView style={styles.container}>
-      <Stack.Screen
-        options={{
-          headerTitle: () => <UIKitChatHeaderTitle title="位置详情" />,
-          headerTitleAlign: 'center',
-          headerShadowVisible: false,
-          headerStyle: { backgroundColor: '#FFFFFF' }
-        }}
-      />
+      <Stack.Screen options={{ headerShown: false }} />
 
       {!attachment ? (
         <UIKitChatEmptyState
-          title="位置消息不存在"
-          description="当前地理位置还没有同步完成，稍后再试。"
+          title={t('locationDetailUnavailableTitle' as never)}
+          description={t('locationDetailUnavailableDescription' as never)}
         />
       ) : (
         <>
-          <View style={styles.content}>
-            {message?.createTime ? (
-              <ThemedText style={styles.timestamp}>
-                {formatTimestamp(message.createTime)}
-              </ThemedText>
-            ) : null}
-
-            <View style={styles.locationCard}>
-              <View style={styles.locationHeader}>
-                <ThemedText numberOfLines={1} style={styles.locationTitle}>
-                  {attachment.address || '暂无详细地址'}
-                </ThemedText>
-                <ThemedText style={styles.locationSubtitle}>
-                  纬度 {attachment.latitude} · 经度 {attachment.longitude}
-                </ThemedText>
-              </View>
-              <View style={styles.mapPreview}>
-                <View style={styles.mapPinOuter}>
-                  <View style={styles.mapPinInner} />
-                </View>
-                <View style={styles.mapLineHorizontal} />
-                <View style={styles.mapLineVertical} />
-              </View>
-              <View style={styles.actionRow}>
-                <UIKitActionPill
-                  label="打开地图"
-                  tone="primary"
-                  onPress={() => {
-                    openMap().catch((error) => {
-                      Alert.alert(
-                        '打开失败',
-                        error instanceof Error ? error.message : '当前地图无法打开'
-                      )
-                    })
-                  }}
-                />
-                <UIKitActionPill
-                  label="复制地址"
-                  onPress={() => {
-                    Alert.alert('地址信息', attachment.address || '暂无详细地址')
-                  }}
-                />
-              </View>
+          <View style={styles.mapContainer}>
+            {mapImageUrl ? (
+              <Image source={{ uri: mapImageUrl }} style={styles.mapImage} contentFit="cover" />
+            ) : (
+              <View style={styles.mapPlaceholder} />
+            )}
+            <View style={styles.mapOverlayLineHorizontal} />
+            <View style={styles.mapOverlayLineVertical} />
+            <View style={styles.centerMarker}>
+              <View style={styles.centerMarkerDot} />
             </View>
           </View>
 
-          <UIKitChatComposerShell placeholder={placeholder} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('locationDetailBack' as never)}
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ThemedText style={styles.backButtonText}>‹</ThemedText>
+          </Pressable>
+
+          <View style={[styles.bottomGuide, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+            <View style={styles.bottomText}>
+              <ThemedText numberOfLines={1} style={styles.locationTitle}>
+                {locationText.title}
+              </ThemedText>
+              <ThemedText numberOfLines={1} style={styles.locationSubtitle}>
+                {locationText.subtitle}
+              </ThemedText>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('locationDetailNavigate' as never)}
+              style={styles.navigationButton}
+              onPress={() => {
+                openNavigation().catch((error) => {
+                  toast.alert(
+                    t('locationDetailOpenFailed' as never),
+                    error instanceof Error
+                      ? error.message
+                      : t('locationDetailMapOpenUnavailable' as never)
+                  )
+                })
+              }}
+            >
+              <View style={styles.navigationArrow} />
+            </Pressable>
+          </View>
         </>
       )}
     </ThemedView>
@@ -140,80 +173,112 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFFFFF'
   },
-  content: {
+  mapContainer: {
     flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 28
-  },
-  timestamp: {
-    alignSelf: 'center',
-    color: '#BCC4D0',
-    fontSize: 17,
-    lineHeight: 24,
-    marginBottom: 28
-  },
-  locationCard: {
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#D8E0EA',
-    overflow: 'hidden',
-    backgroundColor: '#FFFFFF'
-  },
-  locationHeader: {
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 14,
-    gap: 6
-  },
-  locationTitle: {
-    color: '#2E3541',
-    fontSize: 18,
-    lineHeight: 26,
-    fontWeight: '700'
-  },
-  locationSubtitle: {
-    color: '#A3ADB9',
-    fontSize: 14,
-    lineHeight: 20
-  },
-  mapPreview: {
-    height: 224,
-    backgroundColor: '#EEF2F7',
+    backgroundColor: '#EAF0F6',
     alignItems: 'center',
     justifyContent: 'center'
   },
-  mapPinOuter: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+  mapImage: {
+    ...StyleSheet.absoluteFillObject
+  },
+  mapPlaceholder: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#EAF0F6'
+  },
+  mapOverlayLineHorizontal: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(120, 133, 150, 0.22)'
+  },
+  mapOverlayLineVertical: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(120, 133, 150, 0.22)'
+  },
+  centerMarker: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: '#337EFF',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 2
+    shadowColor: '#337EFF',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4
   },
-  mapPinInner: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+  centerMarkerDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
     backgroundColor: '#FFFFFF'
   },
-  mapLineHorizontal: {
+  backButton: {
     position: 'absolute',
-    width: '100%',
-    height: 2,
-    backgroundColor: '#D9E2ED'
+    left: 28,
+    top: 54,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
+    alignItems: 'center',
+    justifyContent: 'center'
   },
-  mapLineVertical: {
-    position: 'absolute',
-    height: '100%',
-    width: 2,
-    backgroundColor: '#D9E2ED'
+  backButtonText: {
+    color: '#FFFFFF',
+    fontSize: 30,
+    lineHeight: 30,
+    marginTop: -2
   },
-  actionRow: {
+  bottomGuide: {
+    minHeight: 111,
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
-    gap: 10,
-    paddingHorizontal: 18,
-    paddingVertical: 16
+    alignItems: 'flex-start',
+    paddingLeft: 12,
+    paddingRight: 12,
+    paddingTop: 16
+  },
+  bottomText: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 12,
+    gap: 6
+  },
+  locationTitle: {
+    color: '#333333',
+    fontSize: 16,
+    lineHeight: 22
+  },
+  locationSubtitle: {
+    color: '#999999',
+    fontSize: 14,
+    lineHeight: 20
+  },
+  navigationButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#337EFF',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  navigationArrow: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderBottomWidth: 18,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderBottomColor: '#FFFFFF',
+    transform: [{ rotate: '45deg' }, { translateY: 1 }]
   }
 })
 

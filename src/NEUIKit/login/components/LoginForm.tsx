@@ -108,7 +108,10 @@ const LoginForm: React.FC = () => {
   // 提交登录表单
   const submitLoginForm = async () => {
     // 表单验证
-    if (!mobileInputRule.reg.test(loginForm.mobile) || !smsCodeInputRule.reg.test(loginForm.smsCode)) {
+    if (
+      !mobileInputRule.reg.test(loginForm.mobile) ||
+      !smsCodeInputRule.reg.test(loginForm.smsCode)
+    ) {
       toast.info(i18n.mobileOrSmsCodeErrorMsg)
       return
     }
@@ -155,7 +158,10 @@ const LoginForm: React.FC = () => {
       <div className="login-form-container">
         <div className="login-tabs">
           {loginTabs.list.map((item) => (
-            <span key={item.key} className={`login-tab ${loginTabs.active === item.key ? 'active' : ''}`}>
+            <span
+              key={item.key}
+              className={`login-tab ${loginTabs.active === item.key ? 'active' : ''}`}
+            >
               <span>{item.title}</span>
             </span>
           ))}
@@ -180,7 +186,10 @@ const LoginForm: React.FC = () => {
             placeholder={i18n.smsCodePlaceholder}
             rule={smsCodeInputRule}
             addonAfter={
-              <span className={`sms-addon-after ${smsCount > 0 && smsCount < 60 ? 'disabled' : ''}`} onClick={startSmsCount}>
+              <span
+                className={`sms-addon-after ${smsCount > 0 && smsCount < 60 ? 'disabled' : ''}`}
+                onClick={startSmsCount}
+              >
                 {smsText}
               </span>
             }

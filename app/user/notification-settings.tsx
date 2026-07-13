@@ -1,79 +1,81 @@
 import { Stack } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React from 'react'
-import { Alert, Pressable, StyleSheet, View } from 'react-native'
+import { Pressable, StyleSheet, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import { UIKitPage, UIKitRowDivider, UIKitSectionLabel, UIKitSwitchRow } from '@/src/NEUIKit/rn'
 import { preferenceStore } from '@/stores'
 
 const NotificationSettingsScreen = observer(() => {
   const { preferences } = preferenceStore
+  const { t } = useAppTranslation()
+  const notificationsEnabled = preferences.notificationsEnabled
 
   const updateSetting = async (action: () => Promise<unknown>) => {
     try {
       await action()
     } catch (error) {
-      Alert.alert('设置失败', error instanceof Error ? error.message : '请稍后重试')
+      toast.alert(
+        t('settingsUpdateFailed'),
+        error instanceof Error ? error.message : t('commonRetryLater')
+      )
     }
   }
 
   return (
     <UIKitPage style={styles.page}>
-      <Stack.Screen options={{ title: '消息提醒', headerTitleAlign: 'center' }} />
+      <Stack.Screen options={{ title: t('notificationTitle'), headerTitleAlign: 'center' }} />
 
       <View style={styles.card}>
         <UIKitSwitchRow
-          label="新消息通知"
-          value={preferences.notificationsEnabled}
+          label={t('notificationNewMessage')}
+          value={notificationsEnabled}
           onValueChange={(value) => {
             void updateSetting(() => preferenceStore.setNotificationsEnabled(value))
           }}
         />
       </View>
 
-      <UIKitSectionLabel label="消息提醒方式" style={styles.sectionLabel} />
+      <UIKitSectionLabel label={t('notificationMethods')} style={styles.sectionLabel} />
       <View style={styles.card}>
-        <UIKitSwitchRow
-          label="响铃模式"
+        <NotificationSwitchRow
+          label={t('notificationRing')}
           value={preferences.soundEnabled}
+          disabled={!notificationsEnabled}
           onValueChange={(value) => {
             void updateSetting(() => preferenceStore.updatePreference('soundEnabled', value))
           }}
         />
         <UIKitRowDivider />
-        <UIKitSwitchRow
-          label="震动模式"
+        <NotificationSwitchRow
+          label={t('notificationVibrate')}
           value={preferences.vibrationEnabled}
+          disabled={!notificationsEnabled}
           onValueChange={(value) => {
             void updateSetting(() => preferenceStore.updatePreference('vibrationEnabled', value))
           }}
         />
       </View>
 
-      <UIKitSectionLabel label="推送设置" style={styles.sectionLabel} />
+      <UIKitSectionLabel label={t('notificationPushSettings')} style={styles.sectionLabel} />
       <View style={styles.card}>
-        <UIKitSwitchRow
-          label="PC/Web同步接收推送"
-          value={preferences.syncPushEnabled}
-          onValueChange={(value) => {
-            void updateSetting(() => preferenceStore.updatePreference('syncPushEnabled', value))
-          }}
-        />
-        <UIKitRowDivider />
-        <UIKitSwitchRow
-          label="通知栏显示消息详情"
+        <NotificationSwitchRow
+          label={t('notificationShowDetail')}
           value={preferences.showMessageDetail}
+          disabled={!notificationsEnabled}
           onValueChange={(value) => {
-            void updateSetting(() => preferenceStore.updatePreference('showMessageDetail', value))
+            void updateSetting(() => preferenceStore.setShowMessageDetail(value))
           }}
         />
       </View>
 
       <View style={styles.permissionCard}>
         <ThemedText style={styles.permissionText}>
-          系统通知权限：
-          {permissionLabelMap[preferenceStore.notificationPermissionStatus] || '未确定'}
+          {t('notificationPermissionPrefix')}
+          {permissionLabelMap(preferenceStore.notificationPermissionStatus, t)}
         </ThemedText>
         <View style={styles.permissionActions}>
           <Pressable
@@ -82,11 +84,16 @@ const NotificationSettingsScreen = observer(() => {
               try {
                 await preferenceStore.requestNotificationPermission()
               } catch (error) {
-                Alert.alert('请求失败', error instanceof Error ? error.message : '请稍后重试')
+                toast.alert(
+                  t('requestFailed'),
+                  error instanceof Error ? error.message : t('commonRetryLater')
+                )
               }
             }}
           >
-            <ThemedText style={styles.permissionButtonText}>请求授权</ThemedText>
+            <ThemedText style={styles.permissionButtonText}>
+              {t('notificationRequestAuth')}
+            </ThemedText>
           </Pressable>
           <Pressable
             style={styles.permissionButton}
@@ -94,11 +101,16 @@ const NotificationSettingsScreen = observer(() => {
               try {
                 await preferenceStore.openSystemSettings()
               } catch (error) {
-                Alert.alert('打开失败', error instanceof Error ? error.message : '请稍后重试')
+                toast.alert(
+                  t('openFailed'),
+                  error instanceof Error ? error.message : t('commonRetryLater')
+                )
               }
             }}
           >
-            <ThemedText style={styles.permissionButtonText}>系统设置</ThemedText>
+            <ThemedText style={styles.permissionButtonText}>
+              {t('notificationOpenSystemSettings')}
+            </ThemedText>
           </Pressable>
         </View>
       </View>
@@ -106,16 +118,46 @@ const NotificationSettingsScreen = observer(() => {
   )
 })
 
-const permissionLabelMap: Record<string, string> = {
-  granted: '已允许',
-  denied: '已拒绝',
-  undetermined: '未确定'
+function NotificationSwitchRow({
+  label,
+  value,
+  disabled,
+  onValueChange
+}: {
+  label: string
+  value: boolean
+  disabled: boolean
+  onValueChange: (value: boolean) => void
+}) {
+  return (
+    <View style={disabled && styles.rowDisabled}>
+      <UIKitSwitchRow
+        label={label}
+        value={value}
+        onValueChange={(next) => !disabled && onValueChange(next)}
+      />
+    </View>
+  )
+}
+
+function permissionLabelMap(status: string, t: ReturnType<typeof useAppTranslation>['t']) {
+  switch (status) {
+    case 'granted':
+      return t('notificationPermissionGranted')
+    case 'denied':
+      return t('notificationPermissionDenied')
+    case 'unavailable':
+      return t('notificationPermissionUnavailable')
+    default:
+      return t('notificationPermissionUndetermined')
+  }
 }
 
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    padding: 16
+    paddingHorizontal: 16,
+    paddingBottom: 16
   },
   sectionLabel: {
     marginTop: 18,
@@ -126,6 +168,9 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     backgroundColor: '#FFFFFF',
     overflow: 'hidden'
+  },
+  rowDisabled: {
+    opacity: 0.45
   },
   permissionCard: {
     marginTop: 18,

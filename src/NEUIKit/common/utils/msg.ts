@@ -31,7 +31,10 @@ const translate = (key: string): string => {
  * @param msg 消息对象，包含消息类型和文本
  * @returns 根据消息类型返回的提示内容
  */
-export const getMsgContentTipByType = (msg: { messageType?: V2NIMConst.V2NIMMessageType; text?: string }): string => {
+export const getMsgContentTipByType = (msg: {
+  messageType?: V2NIMConst.V2NIMMessageType
+  text?: string
+}): string => {
   const { messageType, text } = msg
   switch (messageType) {
     case V2NIMConst.V2NIMMessageType.V2NIM_MESSAGE_TYPE_TEXT:

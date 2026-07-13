@@ -1,80 +1,188 @@
+import { Image } from 'expo-image'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
-import React, { useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useRef, useState } from 'react'
 import {
-  ActivityIndicator,
-  Alert,
   FlatList,
+  ListRenderItemInfo,
   Pressable,
+  ScrollView,
   StyleSheet,
-  TextInput,
   TouchableOpacity,
   View
 } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
-import { ThemedView } from '@/components/ThemedView'
-import { UIKitIcon } from '@/src/NEUIKit/rn'
-import { conversationStore, friendStore, nimStore, teamStore, userStore } from '@/stores'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
+import {
+  UIKitPage,
+  UIKitSearchBar,
+  UIKitSelectionIndicator,
+  UIKitUserAvatar
+} from '@/src/NEUIKit/rn'
+import {
+  conversationStore,
+  friendStore,
+  nimStore,
+  TEAM_CATEGORY,
+  teamStore,
+  userStore
+} from '@/stores'
+import { ensureNetworkAvailable, getNetworkUnavailableMessage } from '@/utils/network'
 
+const EMPTY_FRIEND_IMAGE = require('@/src/NEUIKit/static/empty.png')
 const MAX_TEAM_MEMBERS = 200
 
+type PickerCandidate = {
+  accountId: string
+  displayName: string
+  searchText: string
+  avatar?: string
+  type: 'friend'
+}
+
+type PickerRowProps = {
+  item: PickerCandidate
+  isSelected: boolean
+  isLast: boolean
+  onPress: (accountId: string) => void
+}
+
+const PICKER_ROW_HEIGHT = 68
+const PICKER_INITIAL_RENDER_COUNT = 12
+const PICKER_BATCH_RENDER_COUNT = 10
+const PICKER_WINDOW_SIZE = 8
+
+const PickerRow = React.memo(
+  function PickerRow({ item, isSelected, isLast, onPress }: PickerRowProps) {
+    return (
+      <Pressable
+        style={[styles.row, isLast && styles.rowLast]}
+        onPress={() => onPress(item.accountId)}
+      >
+        <UIKitSelectionIndicator selected={isSelected} />
+        <UIKitUserAvatar account={item.accountId} avatar={item.avatar} size={42} />
+        <View style={styles.meta}>
+          <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.rowTitle}>
+            {item.displayName}
+          </ThemedText>
+          <ThemedText style={styles.rowSubtitle}>{item.accountId}</ThemedText>
+        </View>
+      </Pressable>
+    )
+  },
+  (prev, next) =>
+    prev.isSelected === next.isSelected &&
+    prev.isLast === next.isLast &&
+    prev.item.accountId === next.item.accountId &&
+    prev.item.displayName === next.item.displayName &&
+    prev.item.avatar === next.item.avatar
+)
+
 const ConversationPickerScreen = observer(() => {
-  const { seedAccountId } = useLocalSearchParams<{ seedAccountId?: string }>()
+  const { t } = useAppTranslation()
+  const { seedAccountId, mode } = useLocalSearchParams<{
+    seedAccountId?: string
+    mode?: 'discussion' | 'group'
+  }>()
   const resolvedSeedAccountId = typeof seedAccountId === 'string' ? seedAccountId : ''
+  const resolvedMode =
+    mode === TEAM_CATEGORY.DISCUSSION
+      ? TEAM_CATEGORY.DISCUSSION
+      : mode === TEAM_CATEGORY.GROUP
+        ? TEAM_CATEGORY.GROUP
+        : resolvedSeedAccountId
+          ? TEAM_CATEGORY.DISCUSSION
+          : TEAM_CATEGORY.GROUP
   const [keyword, setKeyword] = useState('')
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
+  const createRequestLockRef = useRef(false)
 
   const normalizedKeyword = keyword.trim().toLowerCase()
   const currentAccountId = nimStore.getLoginUser()
+  const friendSections = friendStore.friendSections
+
+  const allCandidates = useMemo(() => {
+    const friendCandidates: PickerCandidate[] = friendSections
+      .flatMap((section) => section.data)
+      .filter((friend) => {
+        return friend.accountId !== currentAccountId && friend.accountId !== resolvedSeedAccountId
+      })
+      .map((friend) => ({
+        accountId: friend.accountId,
+        displayName: friend.appellation,
+        searchText: `${friend.appellation} ${friend.accountId}`.toLowerCase(),
+        avatar: friend.avatar,
+        type: 'friend'
+      }))
+
+    return friendCandidates.filter(
+      (item, index, list) =>
+        list.findIndex((candidate) => candidate.accountId === item.accountId) === index
+    )
+  }, [currentAccountId, friendSections, resolvedSeedAccountId])
+  const candidateMap = useMemo(
+    () => new Map(allCandidates.map((item) => [item.accountId, item] as const)),
+    [allCandidates]
+  )
 
   const candidates = useMemo(() => {
-    return friendStore.friendList.filter((friend) => {
-      if (
-        friend.accountId === currentAccountId ||
-        friend.accountId === resolvedSeedAccountId ||
-        friendStore.blockList.includes(friend.accountId)
-      ) {
-        return false
-      }
+    if (!normalizedKeyword) {
+      return allCandidates
+    }
 
-      if (!normalizedKeyword) {
-        return true
-      }
+    return allCandidates.filter((item) => item.searchText.includes(normalizedKeyword))
+  }, [allCandidates, normalizedKeyword])
 
-      const displayName = (
-        friend.alias ||
-        friend.userProfile?.name ||
-        userStore.getDisplayName(friend.accountId)
-      ).toLowerCase()
+  const selectedCandidates = useMemo(() => {
+    return selectedIds
+      .map((accountId) => {
+        const candidate = candidateMap.get(accountId)
 
-      return (
-        displayName.includes(normalizedKeyword) ||
-        friend.accountId.toLowerCase().includes(normalizedKeyword)
-      )
-    })
-  }, [currentAccountId, normalizedKeyword, resolvedSeedAccountId])
+        if (candidate) {
+          return candidate
+        }
+
+        return {
+          accountId,
+          displayName: userStore.getDisplayName(accountId),
+          searchText: accountId.toLowerCase(),
+          avatar: undefined,
+          type: 'friend' as const
+        }
+      })
+      .filter(Boolean)
+  }, [candidateMap, selectedIds])
 
   const inviteeIds = useMemo(() => {
     return Array.from(new Set([...selectedIds, resolvedSeedAccountId].filter(Boolean)))
   }, [resolvedSeedAccountId, selectedIds])
 
-  const toggleSelect = (accountId: string) => {
-    setSelectedIds((current) => {
-      if (current.includes(accountId)) {
-        return current.filter((item) => item !== accountId)
-      }
+  const toggleSelect = useCallback(
+    (accountId: string) => {
+      setSelectedIds((current) => {
+        if (current.includes(accountId)) {
+          return current.filter((item) => item !== accountId)
+        }
 
-      if (current.length >= MAX_TEAM_MEMBERS) {
-        Alert.alert('操作失败', `最多可选 ${MAX_TEAM_MEMBERS} 人`)
-        return current
-      }
+        if (current.length >= MAX_TEAM_MEMBERS) {
+          toast.alert(t('commonTip'), t('commonAtMostSelectContacts', { count: MAX_TEAM_MEMBERS }))
+          return current
+        }
 
-      return [...current, accountId]
-    })
-  }
+        return [...current, accountId]
+      })
+    },
+    [t]
+  )
 
+  const pickerTitle = resolvedSeedAccountId
+    ? t('chooseText')
+    : resolvedMode === TEAM_CATEGORY.DISCUSSION
+      ? t('conversationPickerCreateDiscussionTitle')
+      : t('conversationPickerCreateAdvancedTitle')
   const createTeamName = () => {
     const names = [
       currentAccountId ? userStore.getDisplayName(currentAccountId) : '',
@@ -89,21 +197,31 @@ const ConversationPickerScreen = observer(() => {
     const joinedName = names.join('、')
 
     if (!joinedName) {
-      return '群聊'
+      return t('commonGroupChat')
     }
 
-    return joinedName.length > 30 ? `${joinedName.slice(0, 30)}...` : joinedName
+    return joinedName.slice(0, 30)
   }
 
   const handleCreateTeam = async () => {
-    if (inviteeIds.length === 0 || !nimStore.nim || submitting) {
+    if (inviteeIds.length === 0) {
+      toast.alert(t('commonTip'), t('commonSelectContactsFirst'))
       return
     }
 
+    if (!nimStore.nim || submitting || createRequestLockRef.current) {
+      return
+    }
+
+    createRequestLockRef.current = true
     setSubmitting(true)
 
     try {
-      const team = await teamStore.createTeam(createTeamName(), inviteeIds)
+      await ensureNetworkAvailable()
+
+      const team = await teamStore.createTeam(createTeamName(), inviteeIds, {
+        category: resolvedMode
+      })
 
       if (!team) {
         return
@@ -113,133 +231,227 @@ const ConversationPickerScreen = observer(() => {
       await conversationStore.createConversation(conversationId)
       router.replace({ pathname: '/chat/[id]', params: { id: conversationId } })
     } catch (error) {
-      Alert.alert('创建失败', error instanceof Error ? error.message : '请稍后重试')
+      toast.alert(
+        t('commonCreateFailed'),
+        error instanceof Error ? error.message : getNetworkUnavailableMessage()
+      )
     } finally {
+      createRequestLockRef.current = false
       setSubmitting(false)
     }
   }
 
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
+
+  const renderCandidateItem = useCallback(
+    ({ item, index }: ListRenderItemInfo<PickerCandidate>) => (
+      <PickerRow
+        item={item}
+        isSelected={selectedIdSet.has(item.accountId)}
+        isLast={index === candidates.length - 1}
+        onPress={toggleSelect}
+      />
+    ),
+    [candidates.length, selectedIdSet, toggleSelect]
+  )
+
   return (
-    <ThemedView style={styles.container}>
-      <Stack.Screen options={{ title: '选择', headerTitleAlign: 'center' }} />
-
-      <View style={styles.searchRow}>
-        <TextInput
-          style={styles.input}
-          placeholder="搜索好友"
-          value={keyword}
-          onChangeText={setKeyword}
-        />
-        {!!keyword && (
-          <TouchableOpacity style={styles.clearButton} onPress={() => setKeyword('')}>
-            <ThemedText style={styles.clearText}>清空</ThemedText>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      <View style={styles.summaryRow}>
-        <ThemedText type="defaultSemiBold">已选 {selectedIds.length} 人</ThemedText>
-        <ThemedText style={styles.summaryMeta}>最多可选 {MAX_TEAM_MEMBERS} 人</ThemedText>
-      </View>
-
-      {resolvedSeedAccountId ? (
-        <View style={styles.seedCard}>
-          <ThemedText style={styles.seedLabel}>当前单聊成员将自动加入</ThemedText>
-          <ThemedText type="defaultSemiBold">
-            {userStore.getDisplayName(resolvedSeedAccountId)}
-          </ThemedText>
-          <ThemedText style={styles.subText}>{resolvedSeedAccountId}</ThemedText>
-        </View>
-      ) : null}
-
-      <FlatList
-        data={candidates}
-        keyExtractor={(item) => item.accountId}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <ThemedText>{normalizedKeyword ? '未找到匹配好友' : '暂无可选好友'}</ThemedText>
-          </View>
-        }
-        renderItem={({ item }) => {
-          const isSelected = selectedIds.includes(item.accountId)
-          const displayName =
-            item.alias || item.userProfile?.name || userStore.getDisplayName(item.accountId)
-
-          return (
-            <Pressable style={styles.row} onPress={() => toggleSelect(item.accountId)}>
-              <View style={[styles.avatar, isSelected && styles.avatarSelected]}>
-                <ThemedText style={styles.avatarText}>
-                  {displayName.slice(0, 1).toUpperCase()}
-                </ThemedText>
-              </View>
-              <View style={styles.meta}>
-                <ThemedText type="defaultSemiBold">{displayName}</ThemedText>
-                <ThemedText style={styles.subText}>{item.accountId}</ThemedText>
-              </View>
-              <View style={[styles.checkCircle, isSelected && styles.checkCircleSelected]}>
-                {isSelected ? <UIKitIcon type="icon-yidu" size={16} /> : null}
-              </View>
-            </Pressable>
+    <UIKitPage style={styles.page}>
+      <Stack.Screen
+        options={{
+          title: pickerTitle,
+          headerTitleAlign: 'center',
+          headerLeft: () => (
+            <TouchableOpacity onPress={() => router.back()}>
+              <ThemedText style={styles.cancelText}>{t('conversationPickerCancel')}</ThemedText>
+            </TouchableOpacity>
+          ),
+          headerRight: () => (
+            <TouchableOpacity
+              disabled={selectedIds.length === 0 || submitting}
+              onPress={() => {
+                handleCreateTeam().catch(() => undefined)
+              }}
+            >
+              <ThemedText
+                style={[
+                  styles.confirmText,
+                  (selectedIds.length === 0 || submitting) && styles.confirmTextDisabled
+                ]}
+              >
+                {t('actionConfirm')}
+              </ThemedText>
+            </TouchableOpacity>
           )
         }}
       />
 
-      <TouchableOpacity
-        style={[
-          styles.submitButton,
-          (inviteeIds.length === 0 || submitting) && styles.submitDisabled
-        ]}
-        onPress={handleCreateTeam}
-        disabled={inviteeIds.length === 0 || submitting}
-      >
-        {submitting ? (
-          <ActivityIndicator color="#FFFFFF" />
-        ) : (
-          <ThemedText style={styles.submitText}>确定</ThemedText>
-        )}
-      </TouchableOpacity>
-    </ThemedView>
+      <View style={styles.content}>
+        <UIKitSearchBar
+          value={keyword}
+          onChangeText={setKeyword}
+          placeholder={t('commonSearchFriendsPlaceholder')}
+          style={styles.searchBar}
+        />
+
+        <View style={styles.summaryRow}>
+          <ThemedText style={styles.summaryTitle}>
+            {t('commonSelectedCount', { count: selectedIds.length })}
+          </ThemedText>
+          <ThemedText style={styles.summarySubtitle}>
+            {t('commonSelectUpToCount', { count: MAX_TEAM_MEMBERS })}
+          </ThemedText>
+        </View>
+
+        {selectedCandidates.length > 0 ? (
+          <View style={styles.selectedPanel}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.selectedContent}
+            >
+              {selectedCandidates.map((item) => (
+                <Pressable
+                  key={item.accountId}
+                  style={styles.selectedItem}
+                  onPress={() => toggleSelect(item.accountId)}
+                >
+                  <View style={styles.selectedAvatarWrap}>
+                    <UIKitUserAvatar account={item.accountId} avatar={item.avatar} size={42} />
+                    <View style={styles.selectedRemoveBadge}>
+                      <ThemedText style={styles.selectedRemoveText}>×</ThemedText>
+                    </View>
+                  </View>
+                  <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.selectedName}>
+                    {item.displayName}
+                  </ThemedText>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+
+        <FlatList
+          data={candidates}
+          keyExtractor={(item) => item.accountId}
+          contentContainerStyle={styles.listContent}
+          removeClippedSubviews
+          initialNumToRender={PICKER_INITIAL_RENDER_COUNT}
+          maxToRenderPerBatch={PICKER_BATCH_RENDER_COUNT}
+          windowSize={PICKER_WINDOW_SIZE}
+          updateCellsBatchingPeriod={16}
+          getItemLayout={(_, index) => ({
+            length: PICKER_ROW_HEIGHT,
+            offset: PICKER_ROW_HEIGHT * index,
+            index
+          })}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              {normalizedKeyword ? (
+                <ThemedText>{t('commonNoMatchingFriends')}</ThemedText>
+              ) : (
+                <>
+                  <Image
+                    source={EMPTY_FRIEND_IMAGE}
+                    style={styles.emptyImage}
+                    contentFit="contain"
+                  />
+                  <ThemedText style={styles.emptyTitle}>{t('commonNoFriends')}</ThemedText>
+                </>
+              )}
+            </View>
+          }
+          renderItem={renderCandidateItem}
+          extraData={selectedIds}
+        />
+      </View>
+    </UIKitPage>
   )
 })
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 16,
-    gap: 12
+  page: {
+    flex: 1
   },
-  searchRow: {
-    flexDirection: 'row',
-    gap: 10
-  },
-  input: {
+  content: {
     flex: 1,
-    minHeight: 48,
-    borderRadius: 14,
+    padding: 16
+  },
+  cancelText: {
+    color: '#6E7580',
+    fontSize: 17,
+    lineHeight: 24
+  },
+  confirmText: {
+    color: '#337EFF',
+    fontSize: 17,
+    lineHeight: 24,
+    fontWeight: '600'
+  },
+  confirmTextDisabled: {
+    color: '#B5BCC7'
+  },
+  searchBar: {
+    marginBottom: 12
+  },
+  summaryRow: {
+    marginBottom: 12,
+    paddingHorizontal: 4
+  },
+  summaryTitle: {
+    color: '#333333',
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '600'
+  },
+  summarySubtitle: {
+    marginTop: 4,
+    color: '#98A1AD',
+    fontSize: 13,
+    lineHeight: 18
+  },
+  selectedPanel: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 18,
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#ECE8E5',
-    paddingHorizontal: 14
+    marginBottom: 12
   },
-  clearButton: {
-    minWidth: 72,
-    borderRadius: 14,
-    backgroundColor: '#F4F4F5',
+  selectedContent: {
+    gap: 8,
+    paddingRight: 4
+  },
+  selectedItem: {
+    width: 64,
+    alignItems: 'center'
+  },
+  selectedAvatarWrap: {
+    position: 'relative'
+  },
+  selectedRemoveBadge: {
+    position: 'absolute',
+    top: 0,
+    right: -2,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#111827',
     alignItems: 'center',
     justifyContent: 'center'
   },
-  clearText: {
-    color: '#4B5563',
+  selectedRemoveText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    lineHeight: 14,
     fontWeight: '700'
   },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center'
-  },
-  summaryMeta: {
+  selectedName: {
+    marginTop: 6,
+    width: '100%',
     fontSize: 12,
-    color: '#6B7280'
+    lineHeight: 16,
+    color: '#4B5563',
+    textAlign: 'center'
   },
   seedCard: {
     borderRadius: 18,
@@ -254,70 +466,60 @@ const styles = StyleSheet.create({
     color: '#9A3412'
   },
   emptyState: {
+    flex: 1,
     alignItems: 'center',
-    paddingTop: 48
+    justifyContent: 'center',
+    paddingVertical: 56,
+    gap: 12
+  },
+  emptyImage: {
+    width: 160,
+    height: 120,
+    marginBottom: 12
+  },
+  emptyTitle: {
+    color: '#333333',
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '600'
+  },
+  listContent: {
+    flexGrow: 1,
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden'
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    borderRadius: 18,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#ECE8E5',
-    padding: 14,
-    marginBottom: 12
+    minHeight: 68,
+    paddingHorizontal: 18,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EEF2F7'
   },
-  avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#337EFF',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  avatarSelected: {
-    backgroundColor: '#A61F24'
-  },
-  avatarText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700'
+  rowLast: {
+    borderBottomWidth: 0
   },
   meta: {
     flex: 1
+  },
+  rowTitle: {
+    color: '#333333',
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '500'
+  },
+  rowSubtitle: {
+    marginTop: 2,
+    color: '#98A1AD',
+    fontSize: 12,
+    lineHeight: 16
   },
   subText: {
     marginTop: 4,
     fontSize: 12,
     color: '#6B7280'
-  },
-  checkCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 1.5,
-    borderColor: '#D1D5DB',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  checkCircleSelected: {
-    backgroundColor: '#337EFF',
-    borderColor: '#337EFF'
-  },
-  submitButton: {
-    minHeight: 48,
-    borderRadius: 16,
-    backgroundColor: '#337EFF',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  submitDisabled: {
-    opacity: 0.5
-  },
-  submitText: {
-    color: '#FFFFFF',
-    fontWeight: '700'
   }
 })
 

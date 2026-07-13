@@ -1,17 +1,14 @@
-import { Stack } from 'expo-router'
+import { router, Stack } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React, { useCallback, useEffect, useState } from 'react'
-import {
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  StyleSheet,
-  TouchableOpacity,
-  View
-} from 'react-native'
+import { ActivityIndicator, FlatList, StyleSheet, TouchableOpacity, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { useNavigationLock } from '@/hooks/useNavigationLock'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import {
+  resolveUIKitProfileRoute,
   UIKitEmptyState,
   UIKitOutlineButton,
   UIKitRowDivider,
@@ -19,9 +16,21 @@ import {
   UIKitWhitePage
 } from '@/src/NEUIKit/rn'
 import { friendStore, nimStore, userStore } from '@/stores'
+import { getDisplayErrorMessage } from '@/utils/error-message'
 import { V2NIMFriendAddApplicationStatus } from '@/utils/nim-sdk'
 
+const VALID_LIST_ROW_HEIGHT = 72
+const VALID_LIST_INITIAL_RENDER_COUNT = 10
+const VALID_LIST_BATCH_RENDER_COUNT = 8
+const VALID_LIST_WINDOW_SIZE = 8
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return getDisplayErrorMessage(error, fallback)
+}
+
 const ValidListScreen = observer(() => {
+  const { t } = useAppTranslation()
+  const { runWithNavigationLock } = useNavigationLock()
   const [loading, setLoading] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
 
@@ -31,7 +40,6 @@ const ValidListScreen = observer(() => {
 
     try {
       await friendStore.refreshAll()
-      await friendStore.markApplicationsRead()
       await userStore.fetchUsers(
         friendStore.applications.flatMap((item) => [
           item.applicantAccountId,
@@ -40,67 +48,104 @@ const ValidListScreen = observer(() => {
       )
     } catch (error) {
       setLoadFailed(true)
-      Alert.alert('加载失败', error instanceof Error ? error.message : '验证消息加载失败')
+      toast.alert(
+        t('commonLoadingFailed'),
+        getErrorMessage(error, t('contactsValidListLoadFailed'))
+      )
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     loadApplications().catch(() => undefined)
   }, [loadApplications])
+
+  useEffect(() => {
+    friendStore.markApplicationsRead().catch(() => undefined)
+  }, [])
   const currentAccountId = nimStore.getLoginUser()
+  const deduplicatedApplications = friendStore.deduplicatedApplications
+
+  const openProfile = useCallback(
+    (accountId: string) => {
+      if (!accountId) {
+        return
+      }
+
+      if (accountId === currentAccountId) {
+        runWithNavigationLock(() => {
+          router.push('/user/my-detail' as never)
+        })
+        return
+      }
+
+      resolveUIKitProfileRoute(accountId).then((pathname) => {
+        runWithNavigationLock(() => {
+          router.push({
+            pathname,
+            params: { accountId }
+          } as never)
+        })
+      })
+    },
+    [currentAccountId, runWithNavigationLock]
+  )
 
   return (
     <UIKitWhitePage style={styles.container}>
       <Stack.Screen
         options={{
-          title: '验证消息',
+          title: t('contactsValidListTitle'),
           headerTitleAlign: 'center',
           headerShown: true,
           headerRight: () => (
             <TouchableOpacity
-              onPress={() =>
-                Alert.alert('清空验证消息', '确认清空当前验证消息记录？', [
-                  { text: '取消', style: 'cancel' },
-                  {
-                    text: '确定',
-                    style: 'destructive',
-                    onPress: async () => {
-                      try {
-                        await friendStore.clearApplications()
-                      } catch (error) {
-                        Alert.alert(
-                          '清空失败',
-                          error instanceof Error ? error.message : '请稍后重试'
-                        )
-                      }
-                    }
-                  }
-                ])
-              }
+              onPress={async () => {
+                try {
+                  await friendStore.clearApplications()
+                  toast.success(t('contactsValidListClearSuccess'))
+                } catch (error) {
+                  toast.alert(
+                    t('contactsValidListClearFailed'),
+                    getErrorMessage(error, t('commonRetryLater'))
+                  )
+                }
+              }}
             >
-              <ThemedText style={styles.headerActionText}>清空</ThemedText>
+              <ThemedText style={styles.headerActionText}>{t('commonClear')}</ThemedText>
             </TouchableOpacity>
           )
         }}
       />
       <FlatList
-        data={friendStore.applications}
+        data={deduplicatedApplications}
         keyExtractor={(item) => `${item.applicantAccountId}-${item.timestamp}`}
+        removeClippedSubviews
+        initialNumToRender={VALID_LIST_INITIAL_RENDER_COUNT}
+        maxToRenderPerBatch={VALID_LIST_BATCH_RENDER_COUNT}
+        windowSize={VALID_LIST_WINDOW_SIZE}
+        updateCellsBatchingPeriod={16}
+        getItemLayout={(_, index) => ({
+          length: VALID_LIST_ROW_HEIGHT,
+          offset: VALID_LIST_ROW_HEIGHT * index,
+          index
+        })}
         ListEmptyComponent={
           <View style={styles.emptyState}>
             {loading ? (
               <ActivityIndicator color="#337EFF" />
             ) : loadFailed ? (
               <>
-                <ThemedText style={styles.emptyBodyText}>验证消息加载失败</ThemedText>
+                <ThemedText style={styles.emptyBodyText}>
+                  {t('contactsValidListLoadFailed')}
+                </ThemedText>
                 <TouchableOpacity style={styles.retryButton} onPress={loadApplications}>
-                  <ThemedText style={styles.retryButtonText}>重试</ThemedText>
+                  <ThemedText style={styles.retryButtonText}>{t('commonRetry')}</ThemedText>
                 </TouchableOpacity>
               </>
             ) : (
-              <UIKitEmptyState title="暂无验证消息" />
+              <UIKitEmptyState title={t('contactsValidListEmpty')} />
             )}
           </View>
         }
@@ -112,12 +157,22 @@ const ValidListScreen = observer(() => {
             item.status ===
               V2NIMFriendAddApplicationStatus.V2NIM_FRIEND_ADD_APPLICATION_STATUS_AGREED &&
             isApplicant
-              ? `${displayName} 同意了你的好友请求`
+              ? t('contactsValidListAgreedYourRequest', { name: displayName })
               : item.status ===
                     V2NIMFriendAddApplicationStatus.V2NIM_FRIEND_ADD_APPLICATION_STATUS_REJECTED &&
                   isApplicant
-                ? `${displayName} 拒绝了你的好友请求`
-                : item.postscript || `${displayName} 好友申请`
+                ? t('contactsValidListRejectedYourRequest', { name: displayName })
+                : displayName
+          const secondaryText =
+            item.status ===
+              V2NIMFriendAddApplicationStatus.V2NIM_FRIEND_ADD_APPLICATION_STATUS_AGREED &&
+            isApplicant
+              ? t('contactsValidListFriendRequestAction')
+              : item.status ===
+                    V2NIMFriendAddApplicationStatus.V2NIM_FRIEND_ADD_APPLICATION_STATUS_REJECTED &&
+                  isApplicant
+                ? item.postscript || displayAccountId
+                : t('contactsValidListFriendRequestAction')
           const isPendingInbound =
             item.status ===
               V2NIMFriendAddApplicationStatus.V2NIM_FRIEND_ADD_APPLICATION_STATUS_INIT &&
@@ -126,44 +181,52 @@ const ValidListScreen = observer(() => {
           return (
             <View style={styles.rowWrap}>
               <View style={styles.row}>
-                <UIKitUserAvatar account={displayAccountId} size={54} />
-                <View style={styles.rowBody}>
-                  <ThemedText numberOfLines={1} style={styles.rowText}>
-                    {primaryText}
-                  </ThemedText>
-                  {displayAccountId !== displayName ? (
-                    <ThemedText numberOfLines={1} style={styles.rowSubText}>
-                      {displayAccountId}
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel={displayName}
+                  style={styles.profileArea}
+                  onPress={() => openProfile(displayAccountId)}
+                >
+                  <UIKitUserAvatar account={displayAccountId} size={42} />
+                  <View style={styles.rowBody}>
+                    <ThemedText numberOfLines={1} style={styles.rowText}>
+                      {primaryText}
                     </ThemedText>
-                  ) : null}
-                </View>
+                    <ThemedText numberOfLines={1} style={styles.rowSubText}>
+                      {secondaryText}
+                    </ThemedText>
+                  </View>
+                </TouchableOpacity>
                 {isPendingInbound ? (
                   <View style={styles.actions}>
                     <UIKitOutlineButton
-                      label="拒绝"
+                      label={t('commonReject')}
                       tintColor="#D0D4DB"
                       style={styles.actionButton}
+                      textStyle={styles.actionButtonText}
                       onPress={async () => {
                         try {
                           await friendStore.reject(item)
                         } catch (error) {
-                          Alert.alert(
-                            '拒绝失败',
-                            error instanceof Error ? error.message : '请稍后重试'
+                          toast.alert(
+                            t('contactsValidListRejectFailed'),
+                            getErrorMessage(error, t('commonRetryLater'))
                           )
                         }
                       }}
                     />
                     <UIKitOutlineButton
-                      label="同意"
+                      label={t('commonAgree')}
                       style={styles.actionButton}
+                      textStyle={styles.actionButtonText}
                       onPress={async () => {
                         try {
                           await friendStore.accept(item)
                         } catch (error) {
-                          Alert.alert(
-                            '同意失败',
-                            error instanceof Error ? error.message : '请稍后重试'
+                          toast.alert(
+                            t('contactsValidListAcceptFailed'),
+                            getErrorMessage(error, t('commonRetryLater'))
                           )
                         }
                       }}
@@ -183,12 +246,12 @@ const ValidListScreen = observer(() => {
                   </View>
                 )}
               </View>
-              {index < friendStore.applications.length - 1 ? <UIKitRowDivider /> : null}
+              {index < deduplicatedApplications.length - 1 ? <UIKitRowDivider /> : null}
             </View>
           )
         }}
         contentContainerStyle={
-          friendStore.applications.length === 0 ? styles.emptyContent : undefined
+          deduplicatedApplications.length === 0 ? styles.emptyContent : undefined
         }
       />
     </UIKitWhitePage>
@@ -235,35 +298,54 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 90,
+    minHeight: VALID_LIST_ROW_HEIGHT,
     paddingHorizontal: 20,
-    gap: 14
+    gap: 12
+  },
+  profileArea: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: VALID_LIST_ROW_HEIGHT,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12
   },
   rowBody: {
     flex: 1,
+    minWidth: 0,
     justifyContent: 'center'
   },
   rowText: {
-    color: '#333333',
-    fontSize: 17,
-    lineHeight: 24
+    color: '#000000',
+    fontSize: 16,
+    lineHeight: 22
   },
   rowSubText: {
-    marginTop: 2,
-    color: '#A6AFBB',
+    marginTop: 4,
+    color: '#888888',
     fontSize: 14,
     lineHeight: 20
   },
   actions: {
     flexDirection: 'row',
-    gap: 10,
-    marginLeft: 8
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: 8
   },
   actionButton: {
-    minWidth: 84
+    width: 52,
+    minWidth: 52,
+    height: 30,
+    borderRadius: 6,
+    paddingHorizontal: 0
+  },
+  actionButtonText: {
+    fontSize: 14,
+    lineHeight: 18
   },
   statusWrap: {
     minWidth: 88,
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',

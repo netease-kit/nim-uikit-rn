@@ -30,7 +30,11 @@ const AboutNetease: React.FC = () => {
 
       {/* Logo区域 */}
       <div className="about-logo-box">
-        <img src="https://yx-web-nosdn.netease.im/common/fcd2d5e8d2897d4b2d965e06509f47d2/about-logo.png" className="about-logo-img" alt="网易云信Logo" />
+        <img
+          src="https://yx-web-nosdn.netease.im/common/fcd2d5e8d2897d4b2d965e06509f47d2/about-logo.png"
+          className="about-logo-img"
+          alt="网易云信Logo"
+        />
         <div>{t('appText')}</div>
       </div>
 

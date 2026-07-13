@@ -1,0 +1,4 @@
+- [x] Inspect current P2P settings header and team settings member-add implementation.
+- [x] Update OpenSpec requirement for P2P settings header layout.
+- [x] Adjust P2P settings header layout and add icon style.
+- [x] Validate TypeScript, lint, and OpenSpec change.

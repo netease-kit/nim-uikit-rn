@@ -53,7 +53,12 @@ const PreviewImage: React.FC<PreviewImageProps> = ({ visible, imageUrl, onClose 
   return (
     <div className="nim-preview-image-container" onClick={handleClose}>
       <div className="nim-preview-image-wrapper">
-        <img src={imageUrl} className="nim-preview-image" onClick={handleImageClick} alt="预览图片" />
+        <img
+          src={imageUrl}
+          className="nim-preview-image"
+          onClick={handleImageClick}
+          alt="预览图片"
+        />
         <div className="nim-close-button" onClick={handleClose}>
           ×
         </div>

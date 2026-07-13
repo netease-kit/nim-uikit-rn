@@ -34,7 +34,14 @@ export interface TooltipProps {
 /**
  * 工具提示组件
  */
-const Tooltip: React.FC<TooltipProps> = ({ content, color = '#303133', visible: propVisible = false, align = false, onVisibleChange, children }) => {
+const Tooltip: React.FC<TooltipProps> = ({
+  content,
+  color = '#303133',
+  visible: propVisible = false,
+  align = false,
+  onVisibleChange,
+  children
+}) => {
   // 状态
   const [isShow, setIsShow] = useState(propVisible)
   const [style, setStyle] = useState<React.CSSProperties>({})
@@ -169,7 +176,9 @@ const Tooltip: React.FC<TooltipProps> = ({ content, color = '#303133', visible: 
       const startPos = touchStartPositionRef.current
 
       if (startPos) {
-        const moveDistance = Math.sqrt(Math.pow(currentX - startPos.x, 2) + Math.pow(currentY - startPos.y, 2))
+        const moveDistance = Math.sqrt(
+          Math.pow(currentX - startPos.x, 2) + Math.pow(currentY - startPos.y, 2)
+        )
 
         if (moveDistance < 10) {
           // 允许少量移动
@@ -210,18 +219,32 @@ const Tooltip: React.FC<TooltipProps> = ({ content, color = '#303133', visible: 
     ...style,
     visibility: isShow ? 'visible' : 'hidden',
     color: color === 'white' ? '' : '#fff',
-    boxShadow: color === 'white' ? '0 3px 6px -4px #0000001f, 0 6px 16px #00000014, 0 9px 28px 8px #0000000d' : '',
+    boxShadow:
+      color === 'white'
+        ? '0 3px 6px -4px #0000001f, 0 6px 16px #00000014, 0 9px 28px 8px #0000000d'
+        : '',
     backgroundColor: color
   }
 
   return (
     <div className="nim-tooltip" style={tooltipStyle}>
-      <div ref={contentRef} className="nim-tooltip-content" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchMove={handleTouchMove}>
+      <div
+        ref={contentRef}
+        className="nim-tooltip-content"
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onTouchMove={handleTouchMove}
+      >
         {children}
 
         {isShow && <div className="nim-tooltip-mask" onTouchStart={close}></div>}
 
-        <div ref={popperRef} className="nim-tooltip-popper" onClick={stopPropagation} style={popperStyle}>
+        <div
+          ref={popperRef}
+          className="nim-tooltip-popper"
+          onClick={stopPropagation}
+          style={popperStyle}
+        >
           {content}
         </div>
       </div>

@@ -31,16 +31,21 @@ const TeamMember: React.FC = observer(() => {
 
   // 对群成员进行排序，群主在前，管理员在后，其他成员按加入时间排序
   const sortTeamMembers = (members: V2NIMTeamMember[]) => {
-    const owner = members.filter((item) => item.memberRole === V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_OWNER)
+    const owner = members.filter(
+      (item) => item.memberRole === V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_OWNER
+    )
     const manager = members
-      .filter((item) => item.memberRole === V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_MANAGER)
+      .filter(
+        (item) => item.memberRole === V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_MANAGER
+      )
       .sort((a, b) => a.joinTime - b.joinTime)
     const other = members
       .filter(
         (item) =>
-          ![V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_OWNER, V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_MANAGER].includes(
-            item.memberRole
-          )
+          ![
+            V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_OWNER,
+            V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_MANAGER
+          ].includes(item.memberRole)
       )
       .sort((a, b) => a.joinTime - b.joinTime)
     return [...owner, ...manager, ...other]
@@ -69,7 +74,9 @@ const TeamMember: React.FC = observer(() => {
   const isTeamManager = useMemo(() => {
     const myUser = store.userStore.myUserInfo
     return teamMembers
-      .filter((item) => item.memberRole === V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_MANAGER)
+      .filter(
+        (item) => item.memberRole === V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_MANAGER
+      )
       .some((member) => member.accountId === (myUser ? myUser.accountId : ''))
   }, [teamMembers, store.userStore.myUserInfo])
 
@@ -167,10 +174,26 @@ const TeamMember: React.FC = observer(() => {
           {teamMembers.map((item) => (
             <div className="team-item" key={item.accountId}>
               <div className="team-member">
-                <Avatar gotoUserCard={true} account={item.accountId} teamId={item.teamId} size="40" />
-                <Appellation className="user-name" account={item.accountId} teamId={item.teamId} fontSize={14} />
-                {item.memberRole === V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_OWNER && <div className="user-tag">{t('teamOwner')}</div>}
-                {item.memberRole === V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_MANAGER && <div className="user-tag">{t('manager')}</div>}
+                <Avatar
+                  gotoUserCard={true}
+                  account={item.accountId}
+                  teamId={item.teamId}
+                  size="40"
+                />
+                <Appellation
+                  className="user-name"
+                  account={item.accountId}
+                  teamId={item.teamId}
+                  fontSize={14}
+                />
+                {item.memberRole ===
+                  V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_OWNER && (
+                  <div className="user-tag">{t('teamOwner')}</div>
+                )}
+                {item.memberRole ===
+                  V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_MANAGER && (
+                  <div className="user-tag">{t('manager')}</div>
+                )}
               </div>
 
               {isShowRemoveBtn(item) && (

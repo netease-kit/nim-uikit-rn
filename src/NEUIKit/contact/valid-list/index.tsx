@@ -69,7 +69,9 @@ const ValidList: React.FC = observer(() => {
       }
 
       // 发送通过好友申请的消息
-      const textMsg = store.nim.V2NIMMessageCreator.createTextMessage(t('passFriendAskText')) as unknown as V2NIMMessage
+      const textMsg = store.nim.V2NIMMessageCreator.createTextMessage(
+        t('passFriendAskText')
+      ) as unknown as V2NIMMessage
 
       await store.msgStore.sendMessageActive({
         msg: textMsg,
@@ -85,7 +87,10 @@ const ValidList: React.FC = observer(() => {
   // 渲染验证消息项
   const renderValidItem = (msg: V2NIMFriendAddApplicationForUI) => {
     // 申请已同意
-    if (msg.status === V2NIMConst.V2NIMFriendAddApplicationStatus.V2NIM_FRIEND_ADD_APPLICATION_STATUS_AGREED) {
+    if (
+      msg.status ===
+      V2NIMConst.V2NIMFriendAddApplicationStatus.V2NIM_FRIEND_ADD_APPLICATION_STATUS_AGREED
+    ) {
       return (
         <>
           <div className="valid-item-left">
@@ -105,7 +110,10 @@ const ValidList: React.FC = observer(() => {
       )
     }
     // 申请已拒绝
-    else if (msg.status === V2NIMConst.V2NIMFriendAddApplicationStatus.V2NIM_FRIEND_ADD_APPLICATION_STATUS_REJECTED) {
+    else if (
+      msg.status ===
+      V2NIMConst.V2NIMFriendAddApplicationStatus.V2NIM_FRIEND_ADD_APPLICATION_STATUS_REJECTED
+    ) {
       // 我是申请人
       if (isMeApplicant(msg)) {
         return (
@@ -146,7 +154,10 @@ const ValidList: React.FC = observer(() => {
 
     // }
     // 申请未处理
-    else if (msg.status === V2NIMConst.V2NIMFriendAddApplicationStatus.V2NIM_FRIEND_ADD_APPLICATION_STATUS_INIT) {
+    else if (
+      msg.status ===
+      V2NIMConst.V2NIMFriendAddApplicationStatus.V2NIM_FRIEND_ADD_APPLICATION_STATUS_INIT
+    ) {
       // 我不是申请人（需要我处理的申请）
       if (!isMeApplicant(msg)) {
         return (
@@ -161,10 +172,16 @@ const ValidList: React.FC = observer(() => {
               </div>
             </div>
             <div className="valid-buttons">
-              <div className="valid-button button-reject" onClick={() => handleRejectApplyFriendClick(msg)}>
+              <div
+                className="valid-button button-reject"
+                onClick={() => handleRejectApplyFriendClick(msg)}
+              >
                 {t('rejectText')}
               </div>
-              <div className="valid-button button-accept" onClick={() => handleAcceptApplyFriendClick(msg)}>
+              <div
+                className="valid-button button-accept"
+                onClick={() => handleAcceptApplyFriendClick(msg)}
+              >
                 {t('acceptText')}
               </div>
             </div>

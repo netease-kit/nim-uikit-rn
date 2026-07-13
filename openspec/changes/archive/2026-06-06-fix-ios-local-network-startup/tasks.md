@@ -1,0 +1,5 @@
+- [x] Inspect current iOS startup state and Metro bundle requests.
+- [x] Add iOS local network usage description to Expo config and generated native plist.
+- [x] Reinstall the iOS app on the physical iPhone.
+- [x] Validate OpenSpec and confirm Metro/iPhone startup behavior.
+- [x] Document iOS physical-device Metro startup pitfalls in `AGENTS.md`.

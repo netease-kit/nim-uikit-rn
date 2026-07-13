@@ -1,0 +1,5 @@
+- [x] Inspect RN valid list, UIKit valid list, and Figma verification-message reference.
+- [x] Add OpenSpec requirement for friend verification row layout.
+- [x] Update RN verification row to show avatar, first-line nickname, second-line request action, and fixed action buttons.
+- [x] Add localized request action copy.
+- [x] Validate TypeScript, lint target files, and OpenSpec change.

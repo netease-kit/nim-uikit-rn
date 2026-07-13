@@ -11,12 +11,14 @@
 ## 推荐抽象
 
 ### AuthService
+
 - login
 - logout
 - restoreSession
 - requestSmsCode
 
 ### SessionService
+
 - listSessions
 - createSession
 - deleteSession
@@ -25,6 +27,7 @@
 - toggleMute
 
 ### MessageService
+
 - listHistory
 - sendText
 - sendImage
@@ -34,6 +37,7 @@
 - pin
 
 ### FriendService
+
 - listFriends
 - listApplications
 - addFriend
@@ -43,6 +47,7 @@
 - blockUser
 
 ### TeamService
+
 - listTeams
 - getTeamInfo
 - createTeam
@@ -54,6 +59,7 @@
 ## 输出要求
 
 当用户问“某功能如何从零实现”时，需要说明：
+
 - 业务层需要哪些 service 能力
 - 页面和 store 如何调用这些能力
 - SDK 错误如何映射为用户可见状态

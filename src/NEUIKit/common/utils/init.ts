@@ -1,12 +1,8 @@
-import { V2NIMConst } from "nim-web-sdk-ng/dist/esm/nim";
-import RootStore from "@xkit-yx/im-store-v2";
-import V2NIM from "nim-web-sdk-ng/dist/v2/NIM_BROWSER_SDK";
-import type { V2NIMMessage } from "nim-web-sdk-ng/dist/esm/nim/src/V2NIMMessageService";
-import type { LocalOptions } from "@xkit-yx/im-store-v2/dist/types/types";
-
-const demoAppKey = "";
-const missingDemoAppKeyError =
-  "This demo repository does not bundle an AppKey. Configure src/NEUIKit/common/utils/init.ts before using this H5 initializer.";
+import { V2NIMConst } from 'nim-web-sdk-ng/dist/esm/nim'
+import RootStore from '@xkit-yx/im-store-v2'
+import V2NIM from 'nim-web-sdk-ng/dist/v2/NIM_BROWSER_SDK'
+import type { V2NIMMessage } from 'nim-web-sdk-ng/dist/esm/nim/src/V2NIMMessageService'
+import type { LocalOptions } from '@xkit-yx/im-store-v2/dist/types/types'
 
 export const defaultLocalOptions: LocalOptions = {
   // 添加好友是否需要验证
@@ -16,33 +12,27 @@ export const defaultLocalOptions: LocalOptions = {
   // 是否需要显示群组消息已读未读，默认 false
   teamMsgReceiptVisible: true,
   // 群组被邀请模式，默认需要验证
-  teamAgreeMode:
-    V2NIMConst.V2NIMTeamAgreeMode.V2NIM_TEAM_AGREE_MODE_NO_AUTH,
+  teamAgreeMode: V2NIMConst.V2NIMTeamAgreeMode.V2NIM_TEAM_AGREE_MODE_NO_AUTH
 }
 
 export const init = () => {
-  if (!demoAppKey.trim()) {
-    throw new Error(missingDemoAppKeyError);
-  }
-
   // 是否开启云端会话，实际根据您的业务调整
-  const enableV2CloudConversation =
-    localStorage.getItem("enableV2CloudConversation") === "on";
+  const enableV2CloudConversation = localStorage.getItem('enableV2CloudConversation') === 'on'
   const nim = V2NIM.getInstance(
     {
-      appkey: demoAppKey,
+      appkey: '',
       needReconnect: true,
-      debugLevel: "debug",
-      apiVersion: "v2",
-      enableV2CloudConversation: enableV2CloudConversation,
+      debugLevel: 'debug',
+      apiVersion: 'v2',
+      enableV2CloudConversation: enableV2CloudConversation
     },
     {
       V2NIMLoginServiceConfig: {
-        lbsUrls: ["https://lbs.netease.im/lbs/webconf.jsp"],
-        linkUrl: "weblink.netease.im",
-      },
+        lbsUrls: ['https://lbs.netease.im/lbs/webconf.jsp'],
+        linkUrl: 'weblink.netease.im'
+      }
     }
-  );
+  )
 
   const store = new RootStore(
     // @ts-ignore
@@ -51,17 +41,17 @@ export const init = () => {
       ...defaultLocalOptions,
       // 发送消息前回调, 可对消息体进行修改，添加自定义参数
       sendMsgBefore: async (options: {
-        msg: V2NIMMessage;
-        conversationId: string;
-        serverExtension?: Record<string, unknown>;
+        msg: V2NIMMessage
+        conversationId: string
+        serverExtension?: Record<string, unknown>
       }) => {
-        return { ...options };
-      },
+        return { ...options }
+      }
     },
-    "H5"
-  );
+    'H5'
+  )
   return {
     nim,
-    store,
-  };
-};
+    store
+  }
+}

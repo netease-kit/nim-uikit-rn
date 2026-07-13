@@ -1,9 +1,12 @@
 import React from 'react'
 import {
+  type DimensionValue,
+  Linking,
   Pressable,
   ScrollView,
   StyleProp,
   StyleSheet,
+  type TextProps,
   TextStyle,
   TouchableOpacity,
   View,
@@ -11,15 +14,19 @@ import {
 } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
-import { EMOJI_ICON_MAP_CONFIG } from '@/src/NEUIKit/common/utils/emoji'
+import {
+  EMOJI_ICON_MAP_CONFIG,
+  EMOJI_RENDER_ICON_MAP_CONFIG
+} from '@/src/NEUIKit/common/utils/emoji'
 import { calculateMatrix } from '@/src/NEUIKit/common/utils/matrix'
 import { parseText } from '@/src/NEUIKit/common/utils/parseText'
+import { translateCurrentApp } from '@/utils/app-language'
 
 import { UIKitUserAvatar } from './components'
 import { UIKitSearchBar } from './contact-friend'
 import { NEUIKitIconName, UIKitIcon } from './icon'
 
-const EMOJI_VISIBLE_ROW_COUNT = 4
+const EMOJI_VISIBLE_ROW_COUNT = 3
 const EMOJI_ITEM_SIZE = 40
 const EMOJI_ROW_GAP = 8
 const EMOJI_GRID_MAX_HEIGHT =
@@ -27,15 +34,57 @@ const EMOJI_GRID_MAX_HEIGHT =
 const READ_RECEIPT_WRAP_SIZE = 22
 const READ_RECEIPT_SECTOR_SIZE = 14
 const READ_RECEIPT_ICON_SIZE = 18
+const RICH_TEXT_LINE_HEIGHT = 24
+const LATIN_WORD_PATTERN = /^[A-Za-z0-9_:/?#@!$&'()*+,;=.%~-]$/
 
-export function UIKitChatHeaderTitle({ title, subtitle }: { title: string; subtitle?: string }) {
+function splitRichTextWrapUnits(value: string) {
+  const units: string[] = []
+  let latinRun = ''
+
+  Array.from(value).forEach((char) => {
+    if (LATIN_WORD_PATTERN.test(char)) {
+      latinRun += char
+      return
+    }
+
+    if (latinRun) {
+      units.push(latinRun)
+      latinRun = ''
+    }
+
+    units.push(char)
+  })
+
+  if (latinRun) {
+    units.push(latinRun)
+  }
+
+  return units
+}
+
+export function UIKitChatHeaderTitle({
+  title,
+  subtitle,
+  statusText
+}: {
+  title: string
+  subtitle?: string
+  statusText?: string
+}) {
   return (
     <View style={styles.headerTitleWrap}>
-      <ThemedText numberOfLines={1} style={styles.headerTitleText}>
-        {title}
-      </ThemedText>
+      <View style={styles.headerTitleLine}>
+        <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.headerTitleText}>
+          {title}
+        </ThemedText>
+        {statusText ? (
+          <ThemedText numberOfLines={1} style={styles.headerStatusText}>
+            {`(${statusText})`}
+          </ThemedText>
+        ) : null}
+      </View>
       {subtitle ? (
-        <ThemedText numberOfLines={1} style={styles.headerSubtitleText}>
+        <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.headerSubtitleText}>
           {subtitle}
         </ThemedText>
       ) : null}
@@ -133,6 +182,7 @@ export function UIKitMessageCard({
   subtitle,
   preview,
   highlightedPreview,
+  previewNumberOfLines,
   failed,
   footer,
   style,
@@ -142,11 +192,14 @@ export function UIKitMessageCard({
   subtitle?: string
   preview: string
   highlightedPreview?: React.ReactNode
+  previewNumberOfLines?: number | null
   failed?: boolean
   footer?: React.ReactNode
   style?: StyleProp<ViewStyle>
   onPress?: () => void
 }) {
+  const resolvedPreviewNumberOfLines =
+    previewNumberOfLines === null ? undefined : (previewNumberOfLines ?? 4)
   const content = (
     <View style={[styles.messageCard, style]}>
       <View style={styles.messageCardHeader}>
@@ -163,14 +216,19 @@ export function UIKitMessageCard({
         {highlightedPreview ? (
           highlightedPreview
         ) : (
-          <ThemedText numberOfLines={4} style={styles.messageCardPreview}>
+          <ThemedText
+            numberOfLines={resolvedPreviewNumberOfLines}
+            style={styles.messageCardPreview}
+          >
             {preview}
           </ThemedText>
         )}
       </View>
       {failed ? (
         <View style={styles.failedBadge}>
-          <ThemedText style={styles.failedBadgeText}>发送失败</ThemedText>
+          <ThemedText style={styles.failedBadgeText}>
+            {translateCurrentApp('commonSendFailedLabel' as never)}
+          </ThemedText>
         </View>
       ) : null}
       {footer}
@@ -224,14 +282,18 @@ export function UIKitActionPill({
 
 export function UIKitSelectionIndicator({
   selected,
-  style
+  style,
+  textStyle
 }: {
   selected: boolean
   style?: StyleProp<ViewStyle>
+  textStyle?: StyleProp<TextStyle>
 }) {
   return (
     <View style={[styles.selectionIndicator, selected && styles.selectionIndicatorSelected, style]}>
-      {selected ? <ThemedText style={styles.selectionIndicatorText}>✓</ThemedText> : null}
+      {selected ? (
+        <ThemedText style={[styles.selectionIndicatorText, textStyle]}>✓</ThemedText>
+      ) : null}
     </View>
   )
 }
@@ -241,23 +303,46 @@ export function UIKitChatToolbarAction({
   label,
   onPress,
   active = false,
-  noTint = false
+  noTint = false,
+  activeTintColor = '#337EFF',
+  inactiveTintColor = '#A0A8B4',
+  disabled = false,
+  hideLabel = false,
+  iconSize = 22,
+  iconWrapSize = 40
 }: {
   icon?: NEUIKitIconName
   label: string
   onPress: () => void
   active?: boolean
   noTint?: boolean
+  activeTintColor?: string
+  inactiveTintColor?: string
+  disabled?: boolean
+  hideLabel?: boolean
+  iconSize?: number
+  iconWrapSize?: number
 }) {
+  const muted = disabled || !active
+
   return (
-    <TouchableOpacity style={styles.toolbarAction} onPress={onPress}>
-      <View style={[styles.toolbarIconWrap, active && styles.toolbarIconWrapActive]}>
+    <TouchableOpacity
+      style={[
+        styles.toolbarAction,
+        hideLabel && styles.toolbarActionIconOnly,
+        muted && styles.toolbarActionDisabled
+      ]}
+      onPress={onPress}
+      disabled={disabled}
+    >
+      <View style={[styles.toolbarIconWrap, { width: iconWrapSize, height: iconWrapSize }]}>
         {icon ? (
           <UIKitIcon
             type={icon}
-            size={22}
-            tintColor={noTint ? undefined : active ? '#FFFFFF' : '#4C5564'}
-            style={styles.toolbarIcon}
+            width={iconSize}
+            height={iconSize}
+            tintColor={noTint ? undefined : active ? activeTintColor : inactiveTintColor}
+            style={[styles.toolbarIcon, { width: iconSize, height: iconSize }]}
           />
         ) : (
           <ThemedText style={[styles.toolbarFallback, active && styles.toolbarFallbackActive]}>
@@ -265,7 +350,11 @@ export function UIKitChatToolbarAction({
           </ThemedText>
         )}
       </View>
-      <ThemedText style={styles.toolbarLabel}>{label}</ThemedText>
+      {hideLabel ? null : (
+        <ThemedText style={[styles.toolbarLabel, muted && styles.toolbarLabelDisabled]}>
+          {label}
+        </ThemedText>
+      )}
     </TouchableOpacity>
   )
 }
@@ -282,16 +371,42 @@ export function UIKitChatComposerShell({
     icon?: NEUIKitIconName
     active?: boolean
     noTint?: boolean
+    activeTintColor?: string
+    inactiveTintColor?: string
+    iconSize?: number
+    iconWrapSize?: number
     onPress?: () => void
   }[]
   style?: StyleProp<ViewStyle>
 }) {
   const toolbarActions = actions || [
-    { key: 'voice', label: '语音', icon: 'toolbar-voice' as NEUIKitIconName, noTint: true },
-    { key: 'emoji', label: '表情', icon: 'icon-biaoqing' as NEUIKitIconName },
-    { key: 'image', label: '相册', icon: 'icon-tupian' as NEUIKitIconName },
-    { key: 'collect', label: '收藏', icon: 'icon-collection' as NEUIKitIconName, noTint: true },
-    { key: 'more', label: '更多', icon: 'icon-tianjiaanniu' as NEUIKitIconName }
+    {
+      key: 'voice',
+      label: translateCurrentApp('toolbarVoice' as never),
+      icon: 'toolbar-voice' as NEUIKitIconName,
+      noTint: true
+    },
+    {
+      key: 'emoji',
+      label: translateCurrentApp('toolbarEmoji' as never),
+      icon: 'icon-biaoqing' as NEUIKitIconName
+    },
+    {
+      key: 'image',
+      label: translateCurrentApp('albumText' as never),
+      icon: 'icon-tupian' as NEUIKitIconName
+    },
+    {
+      key: 'collect',
+      label: translateCurrentApp('collectionText' as never),
+      icon: 'icon-collection' as NEUIKitIconName,
+      noTint: true
+    },
+    {
+      key: 'more',
+      label: translateCurrentApp('toolbarMore' as never),
+      icon: 'icon-tianjiaanniu' as NEUIKitIconName
+    }
   ]
 
   return (
@@ -309,6 +424,10 @@ export function UIKitChatComposerShell({
             label={item.label}
             active={item.active}
             noTint={item.noTint}
+            activeTintColor={item.activeTintColor}
+            inactiveTintColor={item.inactiveTintColor}
+            iconSize={item.iconSize}
+            iconWrapSize={item.iconWrapSize}
             onPress={item.onPress || (() => undefined)}
           />
         ))}
@@ -318,8 +437,10 @@ export function UIKitChatComposerShell({
 }
 
 export function UIKitChatActionGrid({
+  columns,
   items
 }: {
+  columns?: number
   items: {
     key: string
     label: string
@@ -328,15 +449,22 @@ export function UIKitChatActionGrid({
     onPress: () => void
   }[]
 }) {
+  const columnCount = Math.max(1, columns || items.length || 1)
+  const itemWidth = `${100 / columnCount}%` as DimensionValue
+
   return (
     <View style={styles.actionGrid}>
       {items.map((item) => (
-        <TouchableOpacity key={item.key} style={styles.actionGridItem} onPress={item.onPress}>
-          <View style={[styles.actionGridIconWrap, item.danger && styles.actionGridIconDanger]}>
+        <TouchableOpacity
+          key={item.key}
+          style={[styles.actionGridItem, { width: itemWidth }]}
+          onPress={item.onPress}
+        >
+          <View style={styles.actionGridIconWrap}>
             {item.icon ? (
               <UIKitIcon
                 type={item.icon}
-                size={20}
+                size={22}
                 tintColor={item.danger ? '#FF6C63' : '#5F6775'}
               />
             ) : (
@@ -360,11 +488,13 @@ export function UIKitEmojiPanel({
   onEmojiPress,
   onDeletePress,
   onSendPress,
+  bottomInset = 0,
   style
 }: {
   onEmojiPress: (emoji: { key: string; type: string }) => void
   onDeletePress: () => void
   onSendPress: () => void
+  bottomInset?: number
   style?: StyleProp<ViewStyle>
 }) {
   const emojiEntries = React.useMemo(
@@ -372,34 +502,44 @@ export function UIKitEmojiPanel({
     []
   )
   const emojiMatrix = React.useMemo(() => calculateMatrix(emojiEntries, 7), [emojiEntries])
+  const lastRowIndex = emojiMatrix.length - 1
 
   return (
     <View style={[styles.emojiPanel, style]}>
-      <ScrollView
-        style={styles.emojiGridViewport}
-        contentContainerStyle={styles.emojiGrid}
-        showsVerticalScrollIndicator={false}
+      <View style={styles.emojiGridCard}>
+        <ScrollView
+          style={styles.emojiGridViewport}
+          contentContainerStyle={styles.emojiGrid}
+          showsVerticalScrollIndicator={false}
+        >
+          {emojiMatrix.map((emojiRow, rowIndex) => (
+            <View key={`row-${rowIndex}`} style={styles.emojiRow}>
+              {emojiRow.map(([key, type]) => (
+                <TouchableOpacity
+                  key={key}
+                  style={styles.emojiItem}
+                  onPress={() => onEmojiPress({ key, type })}
+                >
+                  <UIKitIcon type={type} size={30} />
+                </TouchableOpacity>
+              ))}
+              {rowIndex === lastRowIndex ? (
+                <TouchableOpacity style={styles.emojiDeleteInlineButton} onPress={onDeletePress}>
+                  <UIKitIcon type="icon-tuigejian" size={24} tintColor="#98A1AD" />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+      <View
+        style={[styles.emojiPanelFooter, bottomInset > 0 ? { paddingBottom: bottomInset } : null]}
       >
-        {emojiMatrix.map((emojiRow, rowIndex) => (
-          <View key={`row-${rowIndex}`} style={styles.emojiRow}>
-            {emojiRow.map(([key, type]) => (
-              <TouchableOpacity
-                key={key}
-                style={styles.emojiItem}
-                onPress={() => onEmojiPress({ key, type })}
-              >
-                <UIKitIcon type={type} size={30} />
-              </TouchableOpacity>
-            ))}
-          </View>
-        ))}
-      </ScrollView>
-      <View style={styles.emojiPanelFooter}>
-        <TouchableOpacity style={styles.emojiDeleteButton} onPress={onDeletePress}>
-          <UIKitIcon type="icon-tuigejian" size={24} />
-        </TouchableOpacity>
+        <View style={styles.emojiFooterSpacer} />
         <TouchableOpacity style={styles.emojiSendButton} onPress={onSendPress}>
-          <ThemedText style={styles.emojiSendButtonText}>发送</ThemedText>
+          <ThemedText style={styles.emojiSendButtonText}>
+            {translateCurrentApp('sendText' as never)}
+          </ThemedText>
         </TouchableOpacity>
       </View>
     </View>
@@ -408,10 +548,12 @@ export function UIKitEmojiPanel({
 
 export function UIKitMessageReadIndicator({
   progress,
+  label,
   onPress,
   style
 }: {
   progress: number
+  label?: string
   onPress?: () => void
   style?: StyleProp<ViewStyle>
 }) {
@@ -436,13 +578,19 @@ export function UIKitMessageReadIndicator({
     </View>
   )
 
-  if (!onPress || fullyRead) {
-    return <View style={[styles.messageReadWrap, style]}>{content}</View>
+  if (!onPress) {
+    return (
+      <View style={[styles.messageReadWrap, style]}>
+        {content}
+        {label ? <ThemedText style={styles.messageReadLabel}>{label}</ThemedText> : null}
+      </View>
+    )
   }
 
   return (
     <Pressable style={[styles.messageReadWrap, style]} onPress={onPress}>
       {content}
+      {label ? <ThemedText style={styles.messageReadLabel}>{label}</ThemedText> : null}
     </Pressable>
   )
 }
@@ -453,16 +601,26 @@ export function UIKitChatRichText({
   textStyle,
   mentionStyle,
   linkStyle,
-  emojiSize = 22,
-  containerStyle
+  onPressLink,
+  onLongPressLink,
+  emojiSize = 24,
+  containerStyle,
+  numberOfLines,
+  ellipsizeMode,
+  lineHeight = RICH_TEXT_LINE_HEIGHT
 }: {
   text: string
   ext?: string
   textStyle?: StyleProp<TextStyle>
   mentionStyle?: StyleProp<TextStyle>
   linkStyle?: StyleProp<TextStyle>
+  onPressLink?: (url: string) => void
+  onLongPressLink?: () => void
   emojiSize?: number
   containerStyle?: StyleProp<ViewStyle>
+  numberOfLines?: number
+  ellipsizeMode?: TextProps['ellipsizeMode']
+  lineHeight?: number
 }) {
   const parts = React.useMemo(() => {
     try {
@@ -471,55 +629,142 @@ export function UIKitChatRichText({
       return [{ type: 'text' as const, value: text, key: 'text-0' }]
     }
   }, [ext, text])
+  const hasRenderedEmoji = parts.some(
+    (item) => item.type === 'emoji' && !!EMOJI_RENDER_ICON_MAP_CONFIG[item.value]
+  )
 
-  return (
-    <View style={[styles.richTextWrap, containerStyle]}>
-      {parts.map((item) => {
-        if (item.type === 'emoji') {
-          const type = EMOJI_ICON_MAP_CONFIG[item.value] as NEUIKitIconName | undefined
-
-          if (!type) {
+  if (!hasRenderedEmoji) {
+    return (
+      <ThemedText
+        numberOfLines={numberOfLines}
+        ellipsizeMode={ellipsizeMode}
+        style={[
+          styles.richTextBase,
+          { height: lineHeight, lineHeight },
+          styles.richTextInline,
+          textStyle
+        ]}
+      >
+        {parts.map((item) => {
+          if (item.type === 'Ait') {
             return (
-              <ThemedText key={item.key} style={[styles.richTextBase, textStyle]}>
+              <ThemedText
+                key={item.key}
+                style={[styles.richTextBase, textStyle, styles.richMention, mentionStyle]}
+              >
                 {item.value}
               </ThemedText>
             )
           }
 
+          if (item.type === 'link') {
+            return (
+              <ThemedText
+                key={item.key}
+                style={[styles.richTextBase, textStyle, styles.richLink, linkStyle]}
+                onPress={() => {
+                  if (onPressLink) {
+                    onPressLink(item.value)
+                    return
+                  }
+
+                  Linking.openURL(item.value).catch(() => undefined)
+                }}
+                onLongPress={onLongPressLink}
+              >
+                {item.value}
+              </ThemedText>
+            )
+          }
+
+          return item.value
+        })}
+      </ThemedText>
+    )
+  }
+
+  return (
+    <View
+      style={[
+        styles.richTextWrap,
+        numberOfLines ? styles.richTextClippedWrap : null,
+        numberOfLines ? { maxHeight: lineHeight * numberOfLines } : null,
+        containerStyle
+      ]}
+    >
+      {parts.map((item) => {
+        if (item.type === 'emoji') {
+          const type = EMOJI_RENDER_ICON_MAP_CONFIG[item.value] as NEUIKitIconName | undefined
+
+          if (!type) {
+            return splitRichTextWrapUnits(item.value).map((unit, index) => (
+              <ThemedText
+                key={`${item.key}-${index}`}
+                style={[styles.richTextBase, { height: lineHeight, lineHeight }, textStyle]}
+              >
+                {unit}
+              </ThemedText>
+            ))
+          }
+
           return (
-            <View key={item.key} style={styles.richEmojiWrap}>
+            <View key={item.key} style={[styles.richEmojiWrap, { height: lineHeight }]}>
               <UIKitIcon type={type} size={emojiSize} />
             </View>
           )
         }
 
         if (item.type === 'Ait') {
-          return (
+          return splitRichTextWrapUnits(item.value).map((unit, index) => (
             <ThemedText
-              key={item.key}
-              style={[styles.richTextBase, styles.richMention, textStyle, mentionStyle]}
+              key={`${item.key}-${index}`}
+              style={[
+                styles.richTextBase,
+                { height: lineHeight, lineHeight },
+                textStyle,
+                styles.richMention,
+                mentionStyle
+              ]}
             >
-              {item.value}
+              {unit}
             </ThemedText>
-          )
+          ))
         }
 
         if (item.type === 'link') {
-          return (
+          return splitRichTextWrapUnits(item.value).map((unit, index) => (
             <ThemedText
-              key={item.key}
-              style={[styles.richTextBase, styles.richLink, textStyle, linkStyle]}
+              key={`${item.key}-${index}`}
+              style={[
+                styles.richTextBase,
+                { height: lineHeight, lineHeight },
+                textStyle,
+                styles.richLink,
+                linkStyle
+              ]}
+              onPress={() => {
+                if (onPressLink) {
+                  onPressLink(item.value)
+                  return
+                }
+
+                Linking.openURL(item.value).catch(() => undefined)
+              }}
+              onLongPress={onLongPressLink}
             >
-              {item.value}
+              {unit}
             </ThemedText>
-          )
+          ))
         }
 
-        return (
-          <ThemedText key={item.key} style={[styles.richTextBase, textStyle]}>
-            {item.value}
+        return splitRichTextWrapUnits(item.value).map((unit, index) => (
+          <ThemedText
+            key={`${item.key}-${index}`}
+            style={[styles.richTextBase, { height: lineHeight, lineHeight }, textStyle]}
+          >
+            {unit}
           </ThemedText>
-        )
+        ))
       })}
     </View>
   )
@@ -572,19 +817,40 @@ const styles = StyleSheet.create({
   headerTitleWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    maxWidth: 220
+    maxWidth: 220,
+    flexShrink: 1
+  },
+  headerTitleLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    maxWidth: '100%',
+    minWidth: 0
   },
   headerTitleText: {
     color: '#1E2633',
     fontSize: 18,
     lineHeight: 24,
-    fontWeight: '700'
+    fontWeight: '700',
+    flexShrink: 1,
+    minWidth: 0,
+    textAlign: 'center'
+  },
+  headerStatusText: {
+    marginLeft: 4,
+    color: '#1E2633',
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: '700',
+    flexShrink: 0
   },
   headerSubtitleText: {
     marginTop: 1,
     color: '#97A2B3',
     fontSize: 11,
-    lineHeight: 15
+    lineHeight: 15,
+    width: '100%',
+    textAlign: 'center'
   },
   segmentTabs: {
     flexDirection: 'row',
@@ -780,16 +1046,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6
   },
+  toolbarActionIconOnly: {
+    width: 40,
+    gap: 0
+  },
+  toolbarActionDisabled: {
+    opacity: 0.55
+  },
   toolbarIconWrap: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#EEF2F7',
+    backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center'
-  },
-  toolbarIconWrapActive: {
-    backgroundColor: '#337EFF'
   },
   toolbarIcon: {
     width: 22,
@@ -807,6 +1077,9 @@ const styles = StyleSheet.create({
     color: '#7A8494',
     fontSize: 11,
     lineHeight: 16
+  },
+  toolbarLabelDisabled: {
+    color: '#A0A8B4'
   },
   composerShell: {
     backgroundColor: '#EEF2F7',
@@ -837,23 +1110,18 @@ const styles = StyleSheet.create({
   actionGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    rowGap: 18
+    rowGap: 8
   },
   actionGridItem: {
-    width: '33.33%',
     alignItems: 'center',
-    gap: 8
+    gap: 4,
+    paddingVertical: 6
   },
   actionGridIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 18,
-    backgroundColor: '#F2F5FA',
+    width: 30,
+    height: 30,
     alignItems: 'center',
     justifyContent: 'center'
-  },
-  actionGridIconDanger: {
-    backgroundColor: '#FFF2F0'
   },
   actionGridFallback: {
     color: '#5F6775',
@@ -864,8 +1132,8 @@ const styles = StyleSheet.create({
   },
   actionGridLabel: {
     color: '#596272',
-    fontSize: 12,
-    lineHeight: 18
+    fontSize: 10,
+    lineHeight: 14
   },
   actionGridLabelDanger: {
     color: '#FF6C63'
@@ -873,11 +1141,15 @@ const styles = StyleSheet.create({
   emojiPanel: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#D8E0EA',
-    backgroundColor: '#F5F7FB',
-    paddingHorizontal: 14,
+    backgroundColor: '#F5F7FB'
+  },
+  emojiGridCard: {
+    position: 'relative',
+    backgroundColor: '#FFFFFF',
+    paddingLeft: 14,
+    paddingRight: 14,
     paddingTop: 12,
-    paddingBottom: 10,
-    gap: 12
+    paddingBottom: 8
   },
   emojiGridViewport: {
     maxHeight: EMOJI_GRID_MAX_HEIGHT
@@ -895,24 +1167,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center'
   },
-  emojiPanelFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12
-  },
-  emojiDeleteButton: {
+  emojiDeleteInlineButton: {
     width: 46,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#E7ECF3',
+    height: 40,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D9E1EC',
+    backgroundColor: '#F7F9FC',
     alignItems: 'center',
     justifyContent: 'center'
   },
-  emojiSendButton: {
+  emojiPanelFooter: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E6EBF2'
+  },
+  emojiFooterSpacer: {
     flex: 1,
-    minHeight: 38,
-    borderRadius: 19,
+    minHeight: 46
+  },
+  emojiSendButton: {
+    width: 92,
+    minHeight: 46,
     backgroundColor: '#337EFF',
     alignItems: 'center',
     justifyContent: 'center'
@@ -924,10 +1202,16 @@ const styles = StyleSheet.create({
     fontWeight: '700'
   },
   messageReadWrap: {
-    width: READ_RECEIPT_WRAP_SIZE,
-    height: READ_RECEIPT_WRAP_SIZE,
+    minHeight: READ_RECEIPT_WRAP_SIZE,
     justifyContent: 'center',
-    alignItems: 'center'
+    alignItems: 'center',
+    flexDirection: 'row'
+  },
+  messageReadLabel: {
+    marginLeft: 4,
+    color: '#98A1AD',
+    fontSize: 12,
+    lineHeight: 16
   },
   messageReadIconWrap: {
     width: READ_RECEIPT_ICON_SIZE,
@@ -967,13 +1251,26 @@ const styles = StyleSheet.create({
     backgroundColor: '#4C84FF'
   },
   richTextWrap: {
+    maxWidth: '100%',
     flexDirection: 'row',
     flexWrap: 'wrap',
-    alignItems: 'flex-end'
+    alignItems: 'center',
+    flexShrink: 1
+  },
+  richTextClippedWrap: {
+    overflow: 'hidden'
   },
   richTextBase: {
     fontSize: 16,
-    lineHeight: 24
+    lineHeight: RICH_TEXT_LINE_HEIGHT,
+    height: RICH_TEXT_LINE_HEIGHT,
+    includeFontPadding: false,
+    textAlignVertical: 'center'
+  },
+  richTextInline: {
+    maxWidth: '100%',
+    height: undefined,
+    flexShrink: 1
   },
   richMention: {
     color: '#1861DF'
@@ -982,7 +1279,10 @@ const styles = StyleSheet.create({
     color: '#1861DF'
   },
   richEmojiWrap: {
+    width: 24,
+    height: 24,
     marginHorizontal: 1,
-    marginBottom: 2
+    alignItems: 'center',
+    justifyContent: 'center'
   }
 })

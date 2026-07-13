@@ -1,0 +1,3 @@
+- [x] Inspect conversation list avatar rendering and virtualized row reuse path.
+- [x] Add stable recycling keys to shared RN UIKit avatar image rendering.
+- [x] Validate TypeScript, target lint, and OpenSpec change.

@@ -1,8 +1,11 @@
 # agent-spec-workflow Specification
 
 ## Purpose
+
 TBD - created by archiving change define-agent-spec-workflow. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Repository Onboarding Docs Match The Actual Codebase
 
 The repository SHALL maintain onboarding documentation that references only existing entrypoint files, code directories, and runnable commands for this Expo Router React Native IM demo.
@@ -59,3 +62,11 @@ The agent guide SHALL list validation and startup commands that exist in this re
 - **WHEN** an agent needs to boot the app locally
 - **THEN** the guide routes generic startup to `npm run start` and platform-specific startup to `npm run ios`, `npm run android`, or `npm run web`, without claiming frontend/backend health URLs that do not exist in this repository
 
+### Requirement: iOS Startup Verification
+
+User-visible iOS startup regressions SHALL be validated against the native simulator build when the change touches app assets, first-run copy, or root navigation behavior.
+
+#### Scenario: Startup polish change affects iOS install or first screen
+
+- **WHEN** a change updates iOS app icon assets, first-launch language defaults, or root stack back-button behavior
+- **THEN** the change is verified on the iOS simulator in addition to static checks

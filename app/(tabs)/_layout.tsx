@@ -5,12 +5,22 @@ import React from 'react'
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
+import { useAppTranslation } from '@/hooks/useAppTranslation'
 import { UIKitIcon } from '@/src/NEUIKit/rn'
 import { conversationStore, friendStore, imStoreV2Bridge } from '@/stores'
 
 const TAB_TOUCH_WIDTH = 64
 
+function getMessageUnreadTotal() {
+  return imStoreV2Bridge.hasBoundStore
+    ? imStoreV2Bridge.messageTabUnreadTotal
+    : conversationStore.totalUnread
+}
+
 const TabLayout = observer(() => {
+  const { t } = useAppTranslation()
+  const messageUnread = getMessageUnreadTotal()
+
   return (
     <Tabs
       tabBar={(props) => <FigmaMessageTabBar {...props} />}
@@ -30,11 +40,8 @@ const TabLayout = observer(() => {
       <Tabs.Screen
         name="index"
         options={{
-          title: '消息',
-          tabBarBadge:
-            (imStoreV2Bridge.totalUnread || conversationStore.totalUnread) > 0
-              ? imStoreV2Bridge.totalUnread || conversationStore.totalUnread
-              : undefined,
+          title: t('tabMessages'),
+          tabBarBadge: messageUnread > 0 ? messageUnread : undefined,
           tabBarIcon: ({ focused }) => (
             <UIKitIcon
               type={focused ? 'tab-conversation-selected' : 'tab-conversation'}
@@ -46,9 +53,11 @@ const TabLayout = observer(() => {
       <Tabs.Screen
         name="contacts"
         options={{
-          title: '通讯录',
+          title: t('tabContacts'),
           tabBarBadge:
-            friendStore.unreadApplicationCount > 0 ? friendStore.unreadApplicationCount : undefined,
+            friendStore.displayUnreadApplicationCount > 0
+              ? friendStore.displayUnreadApplicationCount
+              : undefined,
           tabBarIcon: ({ focused }) => (
             <View>
               <UIKitIcon type={focused ? 'tab-contact-selected' : 'tab-contact'} size={28} />
@@ -59,7 +68,7 @@ const TabLayout = observer(() => {
       <Tabs.Screen
         name="my"
         options={{
-          title: '我的',
+          title: t('tabMe'),
           tabBarIcon: ({ focused }) => (
             <UIKitIcon type={focused ? 'tab-me-selected' : 'tab-me'} size={28} />
           )
@@ -70,47 +79,45 @@ const TabLayout = observer(() => {
 })
 
 const FigmaMessageTabBar = observer(({ state, navigation }: BottomTabBarProps) => {
+  const { t } = useAppTranslation()
   const insets = useSafeAreaInsets()
+  const messageUnread = getMessageUnreadTotal()
+  const contactUnread = friendStore.displayUnreadApplicationCount
   const items: {
     key: string
     routeName: 'index' | 'contacts' | 'my'
     label: string
     visualWidth: number
-    labelWidth: number
-    labelLeft: number
     iconLeft: number
+    showUnreadDot?: boolean
     icon: React.ReactNode
     selectedIcon: React.ReactNode
   }[] = [
     {
       key: 'index',
       routeName: 'index',
-      label: '消息',
+      label: t('tabMessages'),
       visualWidth: 28,
-      labelWidth: 20,
-      labelLeft: 4,
       iconLeft: 0,
+      showUnreadDot: messageUnread > 0,
       icon: <UIKitIcon type="tab-conversation" size={28} />,
       selectedIcon: <UIKitIcon type="tab-conversation-selected" size={28} />
     },
     {
       key: 'contacts',
       routeName: 'contacts',
-      label: '通讯录',
+      label: t('tabContacts'),
       visualWidth: 30,
-      labelWidth: 30,
-      labelLeft: 0,
       iconLeft: 1,
+      showUnreadDot: contactUnread > 0,
       icon: <UIKitIcon type="tab-contact" size={28} />,
       selectedIcon: <UIKitIcon type="tab-contact-selected" size={28} />
     },
     {
       key: 'my',
       routeName: 'my',
-      label: '我的',
+      label: t('tabMe'),
       visualWidth: 28,
-      labelWidth: 20,
-      labelLeft: 4,
       iconLeft: 0,
       icon: <UIKitIcon type="tab-me" size={28} />,
       selectedIcon: <UIKitIcon type="tab-me-selected" size={28} />
@@ -152,14 +159,13 @@ const FigmaMessageTabBar = observer(({ state, navigation }: BottomTabBarProps) =
               <View style={[styles.tabVisualItem, { width: item.visualWidth }]}>
                 <View style={[styles.tabIconWrap, { left: item.iconLeft }]}>
                   {focused ? item.selectedIcon : item.icon}
+                  {item.showUnreadDot ? <View style={styles.tabUnreadDot} /> : null}
                 </View>
                 <Text
                   allowFontScaling={false}
                   numberOfLines={1}
-                  style={[
-                    styles.tabLabel,
-                    { color: labelColor, left: item.labelLeft, width: item.labelWidth }
-                  ]}
+                  ellipsizeMode="clip"
+                  style={[styles.tabLabel, { color: labelColor }]}
                 >
                   {item.label}
                 </Text>
@@ -206,9 +212,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center'
   },
+  tabUnreadDot: {
+    position: 'absolute',
+    top: 1,
+    right: 1,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#FF4D4F'
+  },
   tabLabel: {
     position: 'absolute',
     top: 32,
+    left: -(TAB_TOUCH_WIDTH - 28) / 2,
+    width: TAB_TOUCH_WIDTH,
     height: 14,
     fontFamily: 'PingFang SC',
     fontSize: 10,

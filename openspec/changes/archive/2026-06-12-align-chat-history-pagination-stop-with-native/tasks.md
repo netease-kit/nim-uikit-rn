@@ -1,0 +1,3 @@
+- [x] 1. 对照 Android、iOS 原生端历史查询参数，确认 RN 分页锚点与时间边界差异
+- [x] 2. 修复 RN 历史消息合并与锚点推进逻辑，避免连续上滑时出现间隔式缺失
+- [x] 3. 运行 `npm run lint`、`npx tsc --noEmit`、`OPENSPEC_TELEMETRY=0 openspec validate align-chat-history-pagination-stop-with-native --type change --no-interactive`，并确认本地 Metro `http://localhost:8081/status` 正常

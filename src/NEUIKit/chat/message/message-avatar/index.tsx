@@ -13,8 +13,24 @@ interface MessageAvatarProps {
 /**
  * 消息头像组件
  */
-const MessageAvatar: React.FC<MessageAvatarProps> = ({ account, teamId, avatar, size, gotoUserCard, fontSize }) => {
-  return <Avatar account={account} teamId={teamId} avatar={avatar} size={size} gotoUserCard={gotoUserCard} fontSize={fontSize} />
+const MessageAvatar: React.FC<MessageAvatarProps> = ({
+  account,
+  teamId,
+  avatar,
+  size,
+  gotoUserCard,
+  fontSize
+}) => {
+  return (
+    <Avatar
+      account={account}
+      teamId={teamId}
+      avatar={avatar}
+      size={size}
+      gotoUserCard={gotoUserCard}
+      fontSize={fontSize}
+    />
+  )
 }
 
 export default MessageAvatar

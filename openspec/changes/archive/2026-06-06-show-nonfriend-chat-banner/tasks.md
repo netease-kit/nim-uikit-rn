@@ -1,0 +1,5 @@
+- [x] Inspect RN chat detail top-banner behavior and friend relation state.
+- [x] Compare native/Web UIKit non-friend wording and presentation.
+- [x] Add localized non-friend chat banner copy.
+- [x] Show the non-friend banner for P2P stranger chats and hide the security tip in that state.
+- [x] Validate TypeScript, target lint, and OpenSpec change.

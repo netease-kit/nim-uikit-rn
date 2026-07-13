@@ -9,7 +9,10 @@ import { useTranslation } from '@/NEUIKit/common/hooks/useTranslate'
 import { useStateContext } from '@/NEUIKit/common/hooks/useStateContext'
 import { toast } from '@/NEUIKit/common/utils/toast'
 import { neUiKitRouterPath } from '@/NEUIKit/common/utils/uikitRouter'
-import type { V2NIMConversationForUI, V2NIMLocalConversationForUI } from '@xkit-yx/im-store-v2/dist/types/types'
+import type {
+  V2NIMConversationForUI,
+  V2NIMLocalConversationForUI
+} from '@xkit-yx/im-store-v2/dist/types/types'
 import './index.less'
 // import { useEventTracking } from '@/NEUIKit/common/hooks/useEventTracking'
 
@@ -27,8 +30,13 @@ const ConversationList: React.FC = observer(() => {
 
   // 状态
   const conversationList = enableV2CloudConversation
-    ? store.uiStore.conversations.sort((a: V2NIMConversationForUI, b: V2NIMConversationForUI) => b.sortOrder - a.sortOrder)
-    : store.uiStore.localConversations.sort((a: V2NIMLocalConversationForUI, b: V2NIMLocalConversationForUI) => b.sortOrder - a.sortOrder)
+    ? store.uiStore.conversations.sort(
+        (a: V2NIMConversationForUI, b: V2NIMConversationForUI) => b.sortOrder - a.sortOrder
+      )
+    : store.uiStore.localConversations.sort(
+        (a: V2NIMLocalConversationForUI, b: V2NIMLocalConversationForUI) =>
+          b.sortOrder - a.sortOrder
+      )
   const [addDropdownVisible, setAddDropdownVisible] = useState(false)
   const [currentMoveSessionId, setCurrentMoveSessionId] = useState('')
   const [loading, setLoading] = useState(false)
@@ -58,10 +66,13 @@ const ConversationList: React.FC = observer(() => {
       try {
         // 加载更多会话
         if (enableV2CloudConversation) {
-          const offset = store.uiStore.conversations[store.uiStore.conversations.length - 1]?.sortOrder
+          const offset =
+            store.uiStore.conversations[store.uiStore.conversations.length - 1]?.sortOrder
           await store.conversationStore?.getConversationListActive(offset, limit)
         } else {
-          const offset = store.uiStore.localConversations[store.uiStore.localConversations.length - 1]?.sortOrder as number
+          const offset = store.uiStore.localConversations[
+            store.uiStore.localConversations.length - 1
+          ]?.sortOrder as number
           await store.localConversationStore?.getConversationListActive(offset, limit)
         }
       } catch (error) {
@@ -73,61 +84,85 @@ const ConversationList: React.FC = observer(() => {
   }
 
   // 会话左滑处理
-  const handleSessionItemLeftSlide = useCallback((conversation: V2NIMConversationForUI | V2NIMLocalConversationForUI | null) => {
-    // 点击也会触发左滑事件，但此时 conversation 为 null
-    if (conversation) {
-      setCurrentMoveSessionId(conversation.conversationId)
-    } else {
-      setCurrentMoveSessionId('')
-    }
-  }, [])
+  const handleSessionItemLeftSlide = useCallback(
+    (conversation: V2NIMConversationForUI | V2NIMLocalConversationForUI | null) => {
+      // 点击也会触发左滑事件，但此时 conversation 为 null
+      if (conversation) {
+        setCurrentMoveSessionId(conversation.conversationId)
+      } else {
+        setCurrentMoveSessionId('')
+      }
+    },
+    []
+  )
 
   // 点击会话
-  const handleSessionItemClick = useCallback(async (conversation: V2NIMConversationForUI | V2NIMLocalConversationForUI) => {
-    setCurrentMoveSessionId('')
+  const handleSessionItemClick = useCallback(
+    async (conversation: V2NIMConversationForUI | V2NIMLocalConversationForUI) => {
+      setCurrentMoveSessionId('')
 
-    try {
-      await store.uiStore.selectConversation(conversation.conversationId)
-      navigate(neUiKitRouterPath.chat)
-    } catch (error) {
-      toast.info(t('selectSessionFailText'))
-    }
-  }, [])
+      try {
+        await store.uiStore.selectConversation(conversation.conversationId)
+        navigate(neUiKitRouterPath.chat)
+      } catch (error) {
+        toast.info(t('selectSessionFailText'))
+      }
+    },
+    []
+  )
 
   // 删除会话
-  const handleSessionItemDeleteClick = useCallback(async (conversation: V2NIMConversationForUI | V2NIMLocalConversationForUI) => {
-    try {
-      if (enableV2CloudConversation) {
-        await store.conversationStore?.deleteConversationActive(conversation.conversationId)
-      } else {
-        await store.localConversationStore?.deleteConversationActive(conversation.conversationId)
+  const handleSessionItemDeleteClick = useCallback(
+    async (conversation: V2NIMConversationForUI | V2NIMLocalConversationForUI) => {
+      try {
+        if (enableV2CloudConversation) {
+          await store.conversationStore?.deleteConversationActive(conversation.conversationId)
+        } else {
+          await store.localConversationStore?.deleteConversationActive(conversation.conversationId)
+        }
+        setCurrentMoveSessionId('')
+      } catch (error) {
+        toast.info(t('deleteSessionFailText'))
       }
-      setCurrentMoveSessionId('')
-    } catch (error) {
-      toast.info(t('deleteSessionFailText'))
-    }
-  }, [])
+    },
+    []
+  )
 
   // 置顶会话
-  const handleSessionItemStickTopChange = useCallback(async (conversation: V2NIMConversationForUI | V2NIMLocalConversationForUI) => {
-    try {
-      if (conversation.stickTop) {
-        if (enableV2CloudConversation) {
-          await store.conversationStore?.stickTopConversationActive(conversation.conversationId, false)
+  const handleSessionItemStickTopChange = useCallback(
+    async (conversation: V2NIMConversationForUI | V2NIMLocalConversationForUI) => {
+      try {
+        if (conversation.stickTop) {
+          if (enableV2CloudConversation) {
+            await store.conversationStore?.stickTopConversationActive(
+              conversation.conversationId,
+              false
+            )
+          } else {
+            await store.localConversationStore?.stickTopConversationActive(
+              conversation.conversationId,
+              false
+            )
+          }
         } else {
-          await store.localConversationStore?.stickTopConversationActive(conversation.conversationId, false)
+          if (enableV2CloudConversation) {
+            await store.conversationStore?.stickTopConversationActive(
+              conversation.conversationId,
+              true
+            )
+          } else {
+            await store.localConversationStore?.stickTopConversationActive(
+              conversation.conversationId,
+              true
+            )
+          }
         }
-      } else {
-        if (enableV2CloudConversation) {
-          await store.conversationStore?.stickTopConversationActive(conversation.conversationId, true)
-        } else {
-          await store.localConversationStore?.stickTopConversationActive(conversation.conversationId, true)
-        }
+      } catch (error) {
+        toast.info(conversation.stickTop ? t('deleteStickTopFailText') : t('addStickTopFailText'))
       }
-    } catch (error) {
-      toast.info(conversation.stickTop ? t('deleteStickTopFailText') : t('addStickTopFailText'))
-    }
-  }, [])
+    },
+    []
+  )
 
   // 显示/隐藏下拉菜单
   const showAddDropdown = () => {
@@ -164,7 +199,12 @@ const ConversationList: React.FC = observer(() => {
         <div className="conversation-search" onClick={goToSearchPage}>
           <div className="search-input-wrapper">
             <div className="search-icon-wrapper">
-              <Icon iconClassName="search-icon" size={16} style={{ color: '#A6ADB6' }} type="icon-sousuo" />
+              <Icon
+                iconClassName="search-icon"
+                size={16}
+                style={{ color: '#A6ADB6' }}
+                type="icon-sousuo"
+              />
             </div>
             <div className="search-input">{t('searchText')}</div>
           </div>
@@ -179,7 +219,11 @@ const ConversationList: React.FC = observer(() => {
 
       <div className="navigation-bar">
         <div className="logo-box">
-          <img src="https://yx-web-nosdn.netease.im/common/bbcd9929e31bfee02663fc0bcdabe1c5/yx-logo.png" className="logo-img" alt="Logo" />
+          <img
+            src="https://yx-web-nosdn.netease.im/common/bbcd9929e31bfee02663fc0bcdabe1c5/yx-logo.png"
+            className="logo-img"
+            alt="Logo"
+          />
           <div>{t('appText')}</div>
         </div>
 

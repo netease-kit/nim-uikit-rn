@@ -77,7 +77,11 @@ const DetailItemEdit: React.FC = observer(() => {
     }
 
     // 邮箱格式验证
-    if (key === 'email' && !/[a-zA-Z0-9]+([-_.][A-Za-zd]+)*@([a-zA-Z0-9]+[-.])+[A-Za-zd]{2,5}$/.test(value) && value.trim() !== '') {
+    if (
+      key === 'email' &&
+      !/[a-zA-Z0-9]+([-_.][A-Za-zd]+)*@([a-zA-Z0-9]+[-.])+[A-Za-zd]{2,5}$/.test(value) &&
+      value.trim() !== ''
+    ) {
       toast.info(t('emailErrorText'))
       return
     }

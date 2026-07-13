@@ -42,7 +42,10 @@ const TeamAdd: React.FC = observer(() => {
     setTeamId(id)
 
     // 获取好友列表
-    const _friendList = store.uiStore.friends.filter((item) => !store?.relationStore.blacklist.includes(item.accountId)) || []
+    const _friendList =
+      store.uiStore.friends.filter(
+        (item) => !store?.relationStore.blacklist.includes(item.accountId)
+      ) || []
 
     // 获取当前群成员列表
     const res = store.teamMemberStore.getTeamMember(id) || []
@@ -113,7 +116,11 @@ const TeamAdd: React.FC = observer(() => {
         }
       />
       <div className="team-member-select">
-        <PersonSelect personList={friendList} showBtn={false} onCheckboxChange={handleCheckboxChange} />
+        <PersonSelect
+          personList={friendList}
+          showBtn={false}
+          onCheckboxChange={handleCheckboxChange}
+        />
       </div>
     </div>
   )

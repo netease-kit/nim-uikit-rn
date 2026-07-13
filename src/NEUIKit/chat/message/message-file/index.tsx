@@ -28,7 +28,12 @@ const MessageFile: React.FC<MessageFileProps> = observer(({ msg }) => {
   }
 
   // 获取文件信息
-  const { name = '', url = '', ext = '', size = 0 } = (msg.attachment as V2NIMMessageFileAttachment) || {}
+  const {
+    name = '',
+    url = '',
+    ext = '',
+    size = 0
+  } = (msg.attachment as V2NIMMessageFileAttachment) || {}
 
   // 文件图标类型
   const iconType = fileIconMap[getFileType(ext)] || 'icon-weizhiwenjian'
@@ -42,7 +47,13 @@ const MessageFile: React.FC<MessageFileProps> = observer(({ msg }) => {
   const downloadUrl = url + ((url as string).includes('?') ? '&' : '?') + `download=${name}`
 
   return (
-    <a className="msg-file-wrapper" target="_blank" rel="noopener noreferrer" href={downloadUrl} download={name}>
+    <a
+      className="msg-file-wrapper"
+      target="_blank"
+      rel="noopener noreferrer"
+      href={downloadUrl}
+      download={name}
+    >
       <div className={!msg.isSelf ? 'msg-file msg-file-in' : 'msg-file msg-file-out'}>
         <Icon type={iconType} size={32} />
         <div className="msg-file-content">

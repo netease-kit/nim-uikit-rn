@@ -1,36 +1,64 @@
 import * as Clipboard from 'expo-clipboard'
-import * as ImagePicker from 'expo-image-picker'
 import { router, Stack } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React, { useMemo, useState } from 'react'
-import { Alert, Modal, Pressable, StyleSheet, TextInput, View } from 'react-native'
+import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { useNavigationLock } from '@/hooks/useNavigationLock'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import { UIKitInfoRow, UIKitPage, UIKitRowDivider, UIKitUserAvatar } from '@/src/NEUIKit/rn'
 import { userStore } from '@/stores'
-import { ensureNetworkAvailable, NETWORK_UNAVAILABLE_MESSAGE } from '@/utils/network'
+import * as ImagePicker from '@/utils/image-picker'
+import { NETWORK_UNAVAILABLE_MESSAGE } from '@/utils/network'
 import { ensureCameraPermission, ensureMediaLibraryPermission } from '@/utils/permissions'
 
 const MyDetailScreen = observer(() => {
+  const { t } = useAppTranslation()
+  const { runWithNavigationLock } = useNavigationLock()
   const profile = userStore.selfProfile
+  const displayName = profile?.name || profile?.accountId || t('myDetailUnset')
   const [avatarSheetVisible, setAvatarSheetVisible] = useState(false)
   const [birthdayModalVisible, setBirthdayModalVisible] = useState(false)
   const [birthdayDraft, setBirthdayDraft] = useState(resolveBirthdayDraft(profile?.birthday))
 
-  const birthdayLabel = useMemo(() => formatBirthday(profile?.birthday), [profile?.birthday])
-  const genderLabel = useMemo(() => formatGender(profile?.gender), [profile?.gender])
+  const birthdayLabel = useMemo(
+    () => formatBirthday(profile?.birthday, t('myDetailUnset')),
+    [profile?.birthday, t]
+  )
+  const genderLabel = useMemo(() => formatGender(profile?.gender, t), [profile?.gender, t])
 
   const openBirthdayModal = () => {
     setBirthdayDraft(resolveBirthdayDraft(profile?.birthday))
     setBirthdayModalVisible(true)
   }
 
+  const navigateToEditField = (field: 'name' | 'mobile' | 'email' | 'sign') => {
+    const titleMap = {
+      name: t('profileTitleNickname'),
+      mobile: t('profileTitleMobile'),
+      email: t('profileTitleEmail'),
+      sign: t('profileTitleSignature')
+    } as const
+
+    runWithNavigationLock(() => {
+      router.push({
+        pathname: '/user/my-detail-edit',
+        params: {
+          field,
+          title: titleMap[field]
+        }
+      } as never)
+    })
+  }
+
   const handleCopy = async () => {
     try {
       await Clipboard.setStringAsync(profile?.accountId || '')
-      Alert.alert('复制成功', profile?.accountId || '')
+      toast.alert(t('copySuccess'), profile?.accountId || '')
     } catch (error) {
-      Alert.alert('复制失败', error instanceof Error ? error.message : '账号复制失败')
+      toast.alert(t('copyFailed'), error instanceof Error ? error.message : t('myDetailCopyFailed'))
     }
   }
 
@@ -51,10 +79,12 @@ const MyDetailScreen = observer(() => {
     }
 
     try {
-      await ensureNetworkAvailable()
       await userStore.updateAvatar(result.assets[0].uri)
     } catch (error) {
-      Alert.alert('上传失败', error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE)
+      toast.alert(
+        t('uploadFailed'),
+        error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE
+      )
     }
   }
 
@@ -75,10 +105,12 @@ const MyDetailScreen = observer(() => {
     }
 
     try {
-      await ensureNetworkAvailable()
       await userStore.updateAvatar(result.assets[0].uri)
     } catch (error) {
-      Alert.alert('上传失败', error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE)
+      toast.alert(
+        t('uploadFailed'),
+        error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE
+      )
     }
   }
 
@@ -86,28 +118,31 @@ const MyDetailScreen = observer(() => {
     const normalizedBirthday = birthdayDraft.trim()
 
     if (normalizedBirthday && !isValidBirthdayInput(normalizedBirthday)) {
-      Alert.alert('保存失败', '请输入正确的生日，格式为 YYYY-MM-DD')
+      toast.alert(t('saveFailed'), t('birthdayFormatError'))
       return
     }
 
     setBirthdayModalVisible(false)
 
     try {
-      await ensureNetworkAvailable()
       await userStore.updateSelfProfile({ birthday: normalizedBirthday })
     } catch (error) {
-      Alert.alert('保存失败', error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE)
+      toast.alert(
+        t('saveFailed'),
+        error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE
+      )
     }
   }
 
   return (
     <UIKitPage style={styles.page}>
-      <Stack.Screen options={{ title: '个人信息', headerTitleAlign: 'center' }} />
+      <Stack.Screen options={{ title: t('myDetailTitle'), headerTitleAlign: 'center' }} />
 
       <View style={styles.card}>
         <UIKitInfoRow
-          label="头像"
+          label={t('myDetailAvatar')}
           value=""
+          compact
           showChevron
           right={
             <UIKitUserAvatar
@@ -120,49 +155,80 @@ const MyDetailScreen = observer(() => {
         />
         <UIKitRowDivider />
         <UIKitInfoRow
-          label="昵称"
-          value={profile?.name || '未设置'}
+          label={t('myDetailNickname')}
+          value={displayName}
+          valueNumberOfLines={1}
+          compact
           showChevron
-          onPress={() => navigateToEdit('name')}
+          onPress={() => navigateToEditField('name')}
         />
         <UIKitRowDivider />
         <UIKitInfoRow
-          label="性别"
+          label={t('myDetailAccount')}
+          compact
+          right={
+            <View style={styles.accountInlineWrap}>
+              <ThemedText numberOfLines={1} style={styles.accountInlineValue}>
+                {profile?.accountId || '-'}
+              </ThemedText>
+              <Pressable style={styles.copyButton} onPress={handleCopy}>
+                <ThemedText style={styles.copyButtonText}>{t('myDetailCopy')}</ThemedText>
+              </Pressable>
+            </View>
+          }
+        />
+        <UIKitRowDivider />
+        <UIKitInfoRow
+          label={t('myDetailGender')}
           value={genderLabel}
+          valueNumberOfLines={1}
+          compact
           showChevron
-          onPress={() => router.push('/user/gender' as never)}
-        />
-        <UIKitRowDivider />
-        <UIKitInfoRow label="生日" value={birthdayLabel} showChevron onPress={openBirthdayModal} />
-        <UIKitRowDivider />
-        <UIKitInfoRow
-          label="手机"
-          value={profile?.mobile || '未设置'}
-          showChevron
-          onPress={() => navigateToEdit('mobile')}
+          onPress={() =>
+            runWithNavigationLock(() => {
+              router.push('/user/gender' as never)
+            })
+          }
         />
         <UIKitRowDivider />
         <UIKitInfoRow
-          label="邮箱"
-          value={profile?.email || '未设置'}
+          label={t('myDetailBirthday')}
+          value={birthdayLabel}
+          valueNumberOfLines={1}
+          compact
           showChevron
-          onPress={() => navigateToEdit('email')}
+          onPress={openBirthdayModal}
+        />
+        <UIKitRowDivider />
+        <UIKitInfoRow
+          label={t('myDetailMobile')}
+          value={profile?.mobile || t('myDetailUnset')}
+          valueNumberOfLines={1}
+          compact
+          showChevron
+          onPress={() => navigateToEditField('mobile')}
+        />
+        <UIKitRowDivider />
+        <UIKitInfoRow
+          label={t('myDetailEmail')}
+          value={profile?.email || t('myDetailUnset')}
+          valueNumberOfLines={1}
+          compact
+          showChevron
+          onPress={() => navigateToEditField('email')}
         />
       </View>
 
       <View style={styles.card}>
         <UIKitInfoRow
-          label="个性签名"
-          value={profile?.sign || '未设置'}
+          label={t('myDetailSignature')}
+          value={profile?.sign || t('myDetailUnset')}
+          valueNumberOfLines={1}
+          compact
           showChevron
-          onPress={() => navigateToEdit('sign')}
+          onPress={() => navigateToEditField('sign')}
         />
       </View>
-
-      <Pressable style={styles.accountCard} onPress={handleCopy}>
-        <ThemedText style={styles.accountLabel}>帐号</ThemedText>
-        <ThemedText style={styles.accountValue}>{profile?.accountId || '-'}</ThemedText>
-      </Pressable>
 
       <Modal
         transparent
@@ -173,12 +239,12 @@ const MyDetailScreen = observer(() => {
         <Pressable style={styles.sheetMask} onPress={() => setAvatarSheetVisible(false)}>
           <View style={styles.sheetWrap}>
             <Pressable style={styles.sheetCard}>
-              <SheetAction label="拍照" onPress={handleTakePhoto} />
+              <SheetAction label={t('photoTake')} onPress={handleTakePhoto} />
               <View style={styles.sheetDivider} />
-              <SheetAction label="从手机相册选择" onPress={handlePickAvatarFromAlbum} />
+              <SheetAction label={t('photoChooseFromAlbum')} onPress={handlePickAvatarFromAlbum} />
             </Pressable>
             <Pressable style={styles.sheetCancel} onPress={() => setAvatarSheetVisible(false)}>
-              <ThemedText style={styles.sheetCancelText}>取消</ThemedText>
+              <ThemedText style={styles.sheetCancelText}>{t('actionCancel')}</ThemedText>
             </Pressable>
           </View>
         </Pressable>
@@ -194,18 +260,14 @@ const MyDetailScreen = observer(() => {
           <View style={styles.birthdayCard}>
             <View style={styles.birthdayHeader}>
               <Pressable onPress={() => setBirthdayModalVisible(false)}>
-                <ThemedText style={styles.birthdayAction}>取消</ThemedText>
+                <ThemedText style={styles.birthdayAction}>{t('actionCancel')}</ThemedText>
               </Pressable>
               <Pressable onPress={handleSaveBirthday}>
-                <ThemedText style={styles.birthdayAction}>确认</ThemedText>
+                <ThemedText style={styles.birthdayAction}>{t('actionConfirm')}</ThemedText>
               </Pressable>
             </View>
-            <TextInput
-              style={styles.birthdayInput}
-              value={birthdayDraft}
-              onChangeText={setBirthdayDraft}
-              placeholder="YYYY-MM-DD"
-            />
+            <BirthdayPicker value={birthdayDraft} onChange={setBirthdayDraft} t={t} />
+            <ThemedText style={styles.birthdayHint}>{t('birthdayPickHint')}</ThemedText>
           </View>
         </View>
       </Modal>
@@ -213,21 +275,103 @@ const MyDetailScreen = observer(() => {
   )
 })
 
-function navigateToEdit(field: 'name' | 'mobile' | 'email' | 'sign') {
-  const titleMap = {
-    name: '昵称',
-    mobile: '手机',
-    email: '邮箱',
-    sign: '个性签名'
-  } as const
+function BirthdayPicker({
+  value,
+  onChange,
+  t
+}: {
+  value: string
+  onChange: (value: string) => void
+  t: ReturnType<typeof useAppTranslation>['t']
+}) {
+  const selected = parseBirthdayParts(value)
+  const today = new Date()
+  const maxYear = today.getFullYear()
+  const years = buildNumberRange(maxYear, 1900)
+  const maxMonth = selected.year === maxYear ? today.getMonth() + 1 : 12
+  const months = buildNumberRange(1, maxMonth)
+  const maxDay =
+    selected.year === maxYear && selected.month === today.getMonth() + 1
+      ? today.getDate()
+      : getDaysInMonth(selected.year, selected.month)
+  const days = buildNumberRange(1, maxDay)
 
-  router.push({
-    pathname: '/user/my-detail-edit',
-    params: {
-      field,
-      title: titleMap[field]
-    }
-  } as never)
+  return (
+    <View style={styles.birthdayPickerWrap}>
+      <BirthdayPickerColumn
+        label={t('birthdayYear')}
+        yearLabel={t('birthdayYear')}
+        values={years}
+        selectedValue={selected.year}
+        onSelect={(nextYear) => {
+          const nextDay = Math.min(selected.day, getDaysInMonth(nextYear, selected.month))
+          onChange(formatBirthdayValue(nextYear, selected.month, nextDay))
+        }}
+      />
+      <BirthdayPickerColumn
+        label={t('birthdayMonth')}
+        yearLabel={t('birthdayYear')}
+        values={months}
+        selectedValue={selected.month}
+        onSelect={(nextMonth) => {
+          const nextDay = Math.min(selected.day, getDaysInMonth(selected.year, nextMonth))
+          onChange(formatBirthdayValue(selected.year, nextMonth, nextDay))
+        }}
+      />
+      <BirthdayPickerColumn
+        label={t('birthdayDay')}
+        yearLabel={t('birthdayYear')}
+        values={days}
+        selectedValue={selected.day}
+        onSelect={(nextDay) => {
+          onChange(formatBirthdayValue(selected.year, selected.month, nextDay))
+        }}
+      />
+    </View>
+  )
+}
+
+function BirthdayPickerColumn({
+  label,
+  values,
+  selectedValue,
+  onSelect,
+  yearLabel
+}: {
+  label: string
+  values: number[]
+  selectedValue: number
+  onSelect: (value: number) => void
+  yearLabel: string
+}) {
+  return (
+    <View style={styles.birthdayColumn}>
+      <ThemedText style={styles.birthdayColumnLabel}>{label}</ThemedText>
+      <ScrollView
+        style={styles.birthdayColumnScroll}
+        contentContainerStyle={styles.birthdayColumnContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {values.map((item) => {
+          const selected = item === selectedValue
+
+          return (
+            <Pressable
+              key={`${label}-${item}`}
+              style={[styles.birthdayOption, selected && styles.birthdayOptionSelected]}
+              onPress={() => onSelect(item)}
+            >
+              <ThemedText
+                style={[styles.birthdayOptionText, selected && styles.birthdayOptionTextSelected]}
+              >
+                {label === yearLabel ? item : String(item).padStart(2, '0')}
+              </ThemedText>
+            </Pressable>
+          )
+        })}
+      </ScrollView>
+    </View>
+  )
 }
 
 function SheetAction({ label, onPress }: { label: string; onPress: () => void }) {
@@ -238,19 +382,19 @@ function SheetAction({ label, onPress }: { label: string; onPress: () => void })
   )
 }
 
-function formatGender(gender?: number) {
+function formatGender(gender: number | undefined, t: ReturnType<typeof useAppTranslation>['t']) {
   if (gender === 1) {
-    return '男'
+    return t('genderMale')
   }
   if (gender === 2) {
-    return '女'
+    return t('genderFemale')
   }
-  return '未知'
+  return t('genderUnknown')
 }
 
-function formatBirthday(birthday?: string) {
+function formatBirthday(birthday: string | undefined, emptyText: string) {
   if (!birthday) {
-    return '未设置'
+    return emptyText
   }
 
   const date = new Date(birthday)
@@ -275,6 +419,39 @@ function resolveBirthdayDraft(birthday?: string) {
   }
 
   return formatDateInput(new Date())
+}
+
+function parseBirthdayParts(value?: string) {
+  const fallback = new Date()
+  const fallbackYear = fallback.getFullYear()
+  const fallbackMonth = fallback.getMonth() + 1
+  const fallbackDay = fallback.getDate()
+
+  if (!value || !isValidBirthdayInput(value)) {
+    return { year: fallbackYear, month: fallbackMonth, day: fallbackDay }
+  }
+
+  const [year, month, day] = value.split('-').map((item) => Number(item))
+  return { year, month, day }
+}
+
+function buildNumberRange(start: number, end: number) {
+  const result: number[] = []
+  const step = start <= end ? 1 : -1
+
+  for (let current = start; step > 0 ? current <= end : current >= end; current += step) {
+    result.push(current)
+  }
+
+  return result
+}
+
+function getDaysInMonth(year: number, month: number) {
+  return new Date(year, month, 0).getDate()
+}
+
+function formatBirthdayValue(year: number, month: number, day: number) {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
 function formatDateInput(date: Date) {
@@ -311,7 +488,9 @@ function isValidBirthdayInput(value: string) {
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 16,
     gap: 16
   },
   card: {
@@ -319,24 +498,32 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     overflow: 'hidden'
   },
-  accountCard: {
-    borderRadius: 24,
-    backgroundColor: '#FFFFFF',
-    minHeight: 68,
-    paddingHorizontal: 20,
+  accountInlineWrap: {
+    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between'
+    gap: 10
   },
-  accountLabel: {
-    color: '#333333',
-    fontSize: 17,
-    lineHeight: 24
-  },
-  accountValue: {
+  accountInlineValue: {
+    maxWidth: 148,
     color: '#98A1AD',
     fontSize: 15,
     lineHeight: 22
+  },
+  copyButton: {
+    minWidth: 44,
+    height: 28,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#D9E1EA',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  copyButtonText: {
+    color: '#4B5563',
+    fontSize: 13,
+    lineHeight: 18
   },
   sheetMask: {
     flex: 1,
@@ -398,16 +585,55 @@ const styles = StyleSheet.create({
     fontSize: 17,
     lineHeight: 24
   },
-  birthdayInput: {
-    minHeight: 54,
+  birthdayPickerWrap: {
     marginHorizontal: 20,
     marginTop: 20,
+    flexDirection: 'row',
+    gap: 12
+  },
+  birthdayColumn: {
+    flex: 1
+  },
+  birthdayColumnLabel: {
+    marginBottom: 10,
+    color: '#98A1AD',
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center'
+  },
+  birthdayColumnScroll: {
+    maxHeight: 240,
     borderRadius: 18,
-    backgroundColor: '#F4F6FA',
-    paddingHorizontal: 16,
+    backgroundColor: '#F4F6FA'
+  },
+  birthdayColumnContent: {
+    paddingVertical: 10
+  },
+  birthdayOption: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 8,
+    borderRadius: 14
+  },
+  birthdayOptionSelected: {
+    backgroundColor: '#337EFF'
+  },
+  birthdayOptionText: {
+    color: '#333333',
     fontSize: 16,
-    lineHeight: 22,
-    color: '#333333'
+    lineHeight: 22
+  },
+  birthdayOptionTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '600'
+  },
+  birthdayHint: {
+    marginHorizontal: 20,
+    marginTop: 14,
+    color: '#98A1AD',
+    fontSize: 13,
+    lineHeight: 18
   }
 })
 

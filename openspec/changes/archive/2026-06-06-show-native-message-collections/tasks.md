@@ -1,0 +1,6 @@
+- [x] Inspect RN collection store/page and Android/iOS collection implementation.
+- [x] Add OpenSpec requirement for cross-device collection visibility.
+- [x] Query all collection types and write RN collections using native message collection type.
+- [x] Parse native collection payload and deserialize native serialized messages.
+- [x] Keep RN legacy collection payload fallback.
+- [x] Validate TypeScript, lint target files, and OpenSpec change.

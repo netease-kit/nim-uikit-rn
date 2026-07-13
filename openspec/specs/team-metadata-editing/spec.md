@@ -1,21 +1,26 @@
 # team-metadata-editing Specification
 
 ## Purpose
+
 TBD - created by archiving change port-im-kit-react-ui-h5. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Team Name And Introduction Editing
 
-The app SHALL provide editors for team name and team introduction with page UI, character counters, length limits, whitespace handling, and save behavior aligned with the tests.
+The app SHALL provide editors for team name and team introduction with page UI, character counters, length limits, whitespace handling, clear-icon alignment, and save behavior aligned with the tests.
 
 #### Scenario: Editing team name or introduction
 
 - **WHEN** the user edits and saves the team name or introduction
 - **THEN** the app validates the input and updates team metadata on success
 
-#### Scenario: Receiving concurrent metadata edits
+#### Scenario: Aligning clear icon with first-line text
 
-- **WHEN** another endpoint or teammate changes the team name or introduction while the user is on related surfaces
-- **THEN** the latest valid metadata propagates to conversation, setting, and chat surfaces according to the tests
+- **GIVEN** the team name or team introduction edit page has non-empty input
+- **WHEN** the clear icon is visible in the multiline input card
+- **THEN** the clear icon SHALL align vertically with the first line of text
+- **AND** tapping the clear icon SHALL keep clearing the current input value
 
 ### Requirement: Team Avatar Editing
 
@@ -34,4 +39,3 @@ The app SHALL provide a page for editing the current user's team nickname and SH
 
 - **WHEN** the user saves a new team nickname
 - **THEN** member and setting surfaces update to the new nickname where required
-

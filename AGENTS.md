@@ -8,6 +8,14 @@ Use [README.md](README.md) for environment setup and startup instructions. Use [
 
 The offline Figma export in [design/figma/instant-messaging](design/figma/instant-messaging) is the local UI visual design source for IM screens. Page UI changes must satisfy both that Figma visual source and the `src/NEUIKit` component/interaction baseline. If they differ, update or adapt `src/NEUIKit` so the UIKit implementation matches the Figma visuals.
 
+## Reference Implementations
+
+When implementing or aligning IM UIKit behavior, these sibling repositories are available as reference implementations. Unless a task explicitly says otherwise, inspect their `master` branch.
+
+- Web implementations, including React, Vue, Web, and H5: `/Users/xumengxiang/Documents/00.NetEase/05.IM/nim-uikit-web`
+- Android implementation: `/Users/xumengxiang/Documents/00.NetEase/05.IM/xkit-android/imkit`
+- iOS implementation: `/Users/xumengxiang/Documents/00.NetEase/05.IM/xkit-ios/IMUIKit`
+
 ## Agent Assets
 
 ### Shared for Codex and OpenCode
@@ -29,6 +37,13 @@ The offline Figma export in [design/figma/instant-messaging](design/figma/instan
 ### Claude Code Compatibility Entrypoint
 
 - [CLAUDE.md](CLAUDE.md): thin wrapper that tells Claude Code to follow [AGENTS.md](AGENTS.md)
+
+## Skill Usage Policy
+
+- agents may only use built-in platform skills and the non-built-in skills explicitly listed in [skills.md](skills.md)
+- `skills.md` is the only repository whitelist for non-built-in skills
+- if a non-built-in skill is not listed in `skills.md`, treat it as disallowed for this repository
+- the initial `skills.md` whitelist is empty until the repository explicitly adds entries
 
 ## Repository Commands
 
@@ -134,6 +149,7 @@ Skip OpenSpec for typo fixes, formatting-only changes, local refactors with no b
 - use `design/figma/instant-messaging/` as the visual design source for page layout, spacing, color, typography, and state screenshots
 - Figma visuals and `src/NEUIKit/` must both be satisfied for UI work; when they differ, update or adapt `src/NEUIKit` and its RN layer so the UIKit implementation matches Figma, unless an OpenSpec requirement or test case explicitly says otherwise
 - when `src/NEUIKit/` does not satisfy an RN page requirement, improve or adapt the UIKit component first instead of building a parallel one-off page implementation
+- when adding or changing user-facing copy, always consider Chinese and English localization together; do not introduce new hardcoded single-language strings in RN routes, RN UIKit adapters, or shared user-visible utilities when the text should follow the in-app language
 - use `@xkit-yx/im-store-v2` and `@xkit-yx/utils` as the preferred IM state and base utility layer; add local store logic only as an Expo/RN adapter or temporary migration bridge
 - keep raw H5 assumptions isolated when adapting UIKit components for Expo/RN, including DOM APIs, `window`, `localStorage`, Umi routing, and `.less` style imports
 - keep the root navigation tree and initial route ownership in `app/_layout.tsx`
@@ -176,8 +192,12 @@ Skip OpenSpec for typo fixes, formatting-only changes, local refactors with no b
 - startup verification after feature work: run the relevant Expo startup command (`npm run start`, `npm run web`, `npm run ios`, or `npm run android`) and confirm Metro reports ready or Web returns HTTP 200 after bundling
 - OpenSpec change validation: `OPENSPEC_TELEMETRY=0 openspec validate <change-name> --type change --no-interactive`
 - manual app verification after route, store, or NIM changes: confirm login, conversation list, and chat flows on the relevant target
+- when executing testcase-based verification: never verify testcases in parallel; execute exactly one testcase at a time; if it fails, fix and re-verify that same testcase until it passes; once the current testcase passes directly or after repair and re-verification, automatically continue to the next testcase unless the user stops or redirects the work
+- when executing testcase-based verification, keep the testcase execution record updated as work progresses; record the executed testcase range, pass/fail or skipped status, fixes made, validation commands, and any unresolved notes or requirement conflicts
 
 ## Local Startup In Agent Terminals
+
+Development in this repository uses fixed Metro port `8081`. If Metro is already running on `8081`, do not restart it after each fix; rely on Expo/React Native hot update to deliver changes to connected physical devices. For closeout verification in that state, check that `http://localhost:8081/status` returns `packager-status:running` instead of starting a second server or switching ports.
 
 When an agent is asked to start the project from this terminal environment, map startup intent like this:
 
@@ -188,3 +208,13 @@ When an agent is asked to start the project from this terminal environment, map 
 - after completing a feature, do not stop at lint/typecheck; proactively start the affected target and record whether startup succeeded, failed, or was blocked by a local environment issue
 - when validating Web, request `http://localhost:8081` after startup so Metro performs the Web bundle and confirm the response is HTTP 200
 - do not claim backend health URLs, Docker health checks, or fullstack service readiness for this repo; this project is a single Expo app
+
+### iOS Physical Device Metro Checks
+
+When installing or launching the iOS target on a physical iPhone with Metro on port 8081:
+
+- confirm the iPhone and Mac are on the same reachable network before treating an install as failed; the native app can install successfully but remain on the transition screen if the iPhone cannot reach `http://<mac-lan-ip>:8081`
+- if iOS shows the Local Network permission prompt, allow it; if it was denied earlier, ask the user to re-enable local network access for the app in iOS Settings before retrying
+- verify Metro from the Mac with both `curl http://localhost:8081/status` and `curl http://<mac-lan-ip>:8081/status`; both should return `packager-status:running`
+- distinguish install failure from JavaScript loading failure: if `npx expo run:ios --device <device> --port 8081` reports install complete but the iPhone stays on the transition screen, check Metro for an `iOS ... Bundled` line and use `xcrun devicectl device process launch --device <device-id> --terminate-existing --console <bundle-id>` to confirm whether React Native reaches `evaluateJavaScript() with JS bundle`
+- this repo's iOS Debug startup reads React Native's generated `ip.txt` and directly constructs the Metro bundle URL; do not remove that path unless replacing it with an equivalent physical-device Metro resolution, because `RCTBundleURLProvider` auto-detection can return `nil` on physical devices even when the app installed correctly

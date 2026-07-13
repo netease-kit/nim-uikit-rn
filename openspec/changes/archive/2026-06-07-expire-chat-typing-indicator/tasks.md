@@ -1,0 +1,5 @@
+- [x] Inspect RN typing notification send/receive lifecycle.
+- [x] Compare Android/iOS typing indicator timeout behavior.
+- [x] Replace local typing keepalive with idle timeout end notification.
+- [x] Align peer typing display timeout to native 3-second behavior.
+- [x] Validate TypeScript, target lint, OpenSpec change, and Metro status.

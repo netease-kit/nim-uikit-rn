@@ -1,0 +1,5 @@
+- [x] Inspect chat avatar profile routing, friend card state, and friend deletion event handling.
+- [x] Add OpenSpec requirement for realtime stranger-card transition after friend deletion.
+- [x] Apply friend deletion events to local friend state immediately.
+- [x] Reuse local deletion logic for active delete-friend flow.
+- [x] Validate TypeScript, lint target files, and OpenSpec change.

@@ -28,7 +28,12 @@ export interface ToastProps {
 /**
  * Toast 提示组件
  */
-const Toast: React.FC<ToastProps> = ({ message, duration = 2000, type = 'info', visible = false }) => {
+const Toast: React.FC<ToastProps> = ({
+  message,
+  duration = 2000,
+  type = 'info',
+  visible = false
+}) => {
   const [isVisible, setIsVisible] = useState(visible)
 
   useEffect(() => {

@@ -43,7 +43,16 @@ export interface AppellationProps {
  * 根据不同场景显示用户的昵称、备注名等
  */
 const Appellation: React.FC<AppellationProps> = observer(
-  ({ account, teamId, ignoreAlias = false, nickFromMsg, color = '#000', fontSize = 16, className = '', style = {} }) => {
+  ({
+    account,
+    teamId,
+    ignoreAlias = false,
+    nickFromMsg,
+    color = '#000',
+    fontSize = 16,
+    className = '',
+    style = {}
+  }) => {
     const { store } = useStateContext()
     const [appellation, setAppellation] = useState<string>('')
 

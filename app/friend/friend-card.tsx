@@ -1,8 +1,12 @@
+import { useNavigation } from '@react-navigation/native'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, ScrollView, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, View } from 'react-native'
 
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { useNavigationLock } from '@/hooks/useNavigationLock'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import {
   UIKitActionCell,
   UIKitInfoRow,
@@ -11,49 +15,101 @@ import {
   UIKitSwitchRow,
   UIKitWhitePage
 } from '@/src/NEUIKit/rn'
-import { conversationStore, friendStore, nimStore, userStore } from '@/stores'
+import { conversationStore, friendStore, imStoreV2Bridge, nimStore, userStore } from '@/stores'
+import { getDisplayErrorMessage } from '@/utils/error-message'
+import { ensureNetworkAvailable, getNetworkUnavailableMessage } from '@/utils/network'
+
+type FriendCardAIUser = {
+  accountId: string
+  name?: string
+  avatar?: string
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return getDisplayErrorMessage(error, fallback)
+}
 
 const FriendCardScreen = observer(() => {
+  const { t } = useAppTranslation()
   const { accountId } = useLocalSearchParams<{ accountId?: string }>()
   const resolvedAccountId = typeof accountId === 'string' ? accountId : ''
-  const [postscript] = useState('你好，我是 RN Demo 用户')
-  const [savingMute, setSavingMute] = useState(false)
+  const [postscript] = useState(t('friendCardDefaultPostscript'))
+  const [isDeletingFriend, setIsDeletingFriend] = useState(false)
+  const [hasDeletedFriend, setHasDeletedFriend] = useState(false)
+  const { runWithNavigationLock } = useNavigationLock()
+  const navigation = useNavigation()
   const friend = friendStore.friends.get(resolvedAccountId)
+  const aiUsers = imStoreV2Bridge.aiUsers as FriendCardAIUser[]
+  const aiUser = aiUsers.find((item) => item.accountId === resolvedAccountId)
+  const isAIUser = !!aiUser
   const isBlocked = friendStore.blockList.includes(resolvedAccountId)
   const currentAccountId = nimStore.getLoginUser()
   const isSelf = currentAccountId === resolvedAccountId
 
   useEffect(() => {
-    if (!resolvedAccountId || isSelf) {
+    if (!resolvedAccountId || isSelf || isAIUser) {
       return
     }
 
     userStore.fetchUser(resolvedAccountId).catch(() => undefined)
-  }, [isSelf, resolvedAccountId])
+    friendStore.ensureFriendRelationFresh(resolvedAccountId).catch(() => undefined)
+  }, [isAIUser, isSelf, resolvedAccountId])
+
+  useEffect(() => {
+    if (!resolvedAccountId || friend || isSelf) {
+      return
+    }
+
+    imStoreV2Bridge.rootStore?.aiUserStore.getAIUserListActive?.().catch(() => undefined)
+  }, [friend, isSelf, resolvedAccountId])
 
   const profile = isSelf
     ? userStore.selfProfile || userStore.users.get(resolvedAccountId)
     : userStore.users.get(resolvedAccountId) || friend?.userProfile
 
   const conversationId = nimStore.nim?.V2NIMConversationIdUtil.p2pConversationId(resolvedAccountId)
-  const conversation = conversationId ? conversationStore.getConversation(conversationId) : null
-  const muteEnabled = !!conversation?.mute
 
   const title = useMemo(
-    () => friend?.alias || profile?.name || resolvedAccountId,
-    [friend?.alias, profile?.name, resolvedAccountId]
+    () => friend?.alias || profile?.name || aiUser?.name || resolvedAccountId,
+    [aiUser?.name, friend?.alias, profile?.name, resolvedAccountId]
   )
 
   const detailLines = useMemo(() => {
     const lines: string[] = []
+    const nickname = profile?.name || aiUser?.name
 
-    if (profile?.name && profile.name !== title) {
-      lines.push(`昵称:${profile.name}`)
+    if (nickname && nickname !== title) {
+      lines.push(t('commonNicknameText', { name: nickname }))
     }
 
-    lines.push(`账号:${resolvedAccountId}`)
+    lines.push(t('commonAccountText', { account: resolvedAccountId }))
     return lines
-  }, [profile?.name, resolvedAccountId, title])
+  }, [aiUser?.name, profile?.name, resolvedAccountId, t, title])
+
+  const showDeletingState = isDeletingFriend || hasDeletedFriend
+  const isFriendCard = (!!friend || showDeletingState) && !isSelf
+  const showStrangerHeaderTitle = isFriendCard || isSelf
+
+  const handleDeleteFriend = async () => {
+    if (isDeletingFriend) {
+      return
+    }
+
+    try {
+      setIsDeletingFriend(true)
+      await ensureNetworkAvailable()
+      await friendStore.deleteFriend(resolvedAccountId)
+      setHasDeletedFriend(true)
+      if (navigation.canGoBack()) {
+        router.back()
+      } else {
+        router.replace('/(tabs)/contacts' as never)
+      }
+    } catch (error) {
+      setIsDeletingFriend(false)
+      toast.alert(t('commonDeleteFailed'), getErrorMessage(error, getNetworkUnavailableMessage()))
+    }
+  }
 
   const openChat = async () => {
     if (!conversationId) {
@@ -62,9 +118,11 @@ const FriendCardScreen = observer(() => {
 
     try {
       await conversationStore.createConversation(conversationId)
-      router.push({ pathname: '/chat/[id]', params: { id: conversationId } })
+      runWithNavigationLock(() => {
+        router.push({ pathname: '/chat/[id]', params: { id: conversationId } })
+      })
     } catch (error) {
-      Alert.alert('打开失败', error instanceof Error ? error.message : '请稍后重试')
+      toast.alert(t('commonOpenFailed'), getErrorMessage(error, t('commonRetryLater')))
     }
   }
 
@@ -72,160 +130,161 @@ const FriendCardScreen = observer(() => {
     <UIKitWhitePage style={styles.container}>
       <Stack.Screen
         options={{
-          title: friend ? '好友名片' : '陌生人名片',
+          title: showStrangerHeaderTitle
+            ? isFriendCard
+              ? t('friendCardTitle')
+              : t('strangerCardTitle')
+            : '',
           headerTitleAlign: 'center',
           headerShown: true
         }}
       />
 
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-        <UIKitProfileHero
-          account={resolvedAccountId}
-          avatar={profile?.avatar || friend?.userProfile?.avatar}
-          title={title || '未知账号'}
-          lines={detailLines}
-        />
+      {showDeletingState ? (
+        <View style={styles.pendingState}>
+          <ActivityIndicator color="#337EFF" />
+        </View>
+      ) : (
+        <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+          <UIKitProfileHero
+            account={resolvedAccountId}
+            avatar={profile?.avatar || friend?.userProfile?.avatar || aiUser?.avatar}
+            title={title || t('commonUnknownAccount')}
+            lines={detailLines}
+          />
 
-        <View style={styles.group}>
-          <UIKitInfoRow
-            label="备注名"
-            value={friend?.alias || ''}
-            showChevron={!!friend}
-            onPress={
-              friend
-                ? () =>
+          {friend ? (
+            <View style={styles.group}>
+              <UIKitInfoRow
+                label={t('friendCardAlias')}
+                value={friend?.alias || ''}
+                valueNumberOfLines={1}
+                compact
+                showChevron
+                onPress={() =>
+                  runWithNavigationLock(() => {
                     router.push({
                       pathname: '/friend/edit',
                       params: { accountId: resolvedAccountId }
                     } as never)
-                : undefined
-            }
-          />
-        </View>
-
-        {friend ? (
-          <>
-            <View style={styles.group}>
-              <UIKitInfoRow label="生日" value={profile?.birthday || '未设置'} />
-              <UIKitRowDivider />
-              <UIKitInfoRow label="手机" value={profile?.mobile || '未设置'} />
-              <UIKitRowDivider />
-              <UIKitInfoRow label="邮箱" value={profile?.email || '未设置'} />
-              <UIKitRowDivider />
-              <UIKitInfoRow label="个性签名" value={profile?.sign || '未设置'} />
+                  })
+                }
+              />
             </View>
+          ) : null}
 
-            {!isSelf ? (
+          {friend ? (
+            <>
               <View style={styles.group}>
-                <UIKitSwitchRow
-                  label="消息提醒"
-                  value={!muteEnabled}
-                  onValueChange={async (value: boolean) => {
-                    if (!conversationId || savingMute) {
-                      return
-                    }
-
-                    try {
-                      setSavingMute(true)
-                      await conversationStore.toggleMute(conversationId, !value)
-                    } catch (error) {
-                      Alert.alert('设置失败', error instanceof Error ? error.message : '请稍后重试')
-                    } finally {
-                      setSavingMute(false)
-                    }
-                  }}
+                <UIKitInfoRow
+                  label={t('friendCardBirthday')}
+                  value={profile?.birthday || t('commonNotSet')}
+                  valueNumberOfLines={1}
+                  compact
                 />
                 <UIKitRowDivider />
-                <UIKitSwitchRow
-                  label="加入黑名单"
-                  value={isBlocked}
-                  onValueChange={async (value: boolean) => {
-                    try {
-                      if (value) {
-                        await friendStore.addToBlockList(resolvedAccountId)
-                      } else {
-                        await friendStore.removeFromBlockList(resolvedAccountId)
-                      }
-                    } catch (error) {
-                      Alert.alert('操作失败', error instanceof Error ? error.message : '请稍后重试')
-                    }
-                  }}
+                <UIKitInfoRow
+                  label={t('friendCardMobile')}
+                  value={profile?.mobile || t('commonNotSet')}
+                  valueNumberOfLines={1}
+                  compact
+                />
+                <UIKitRowDivider />
+                <UIKitInfoRow
+                  label={t('friendCardEmail')}
+                  value={profile?.email || t('commonNotSet')}
+                  valueNumberOfLines={1}
+                  compact
+                />
+                <UIKitRowDivider />
+                <UIKitInfoRow
+                  label={t('friendCardSignature')}
+                  value={profile?.sign || t('commonNotSet')}
+                  valueNumberOfLines={1}
+                  compact
                 />
               </View>
-            ) : null}
 
-            {!isSelf ? (
-              <View style={styles.group}>
-                <UIKitActionCell label="聊天" onPress={openChat} />
-              </View>
-            ) : null}
+              {!isSelf ? (
+                <View style={styles.group}>
+                  <UIKitSwitchRow
+                    label={t('commonAddToBlacklist')}
+                    value={isBlocked}
+                    onValueChange={async (value: boolean) => {
+                      try {
+                        await ensureNetworkAvailable()
 
-            {!isSelf ? (
-              <View style={styles.group}>
-                <UIKitActionCell
-                  label="删除好友"
-                  tone="danger"
-                  onPress={() =>
-                    Alert.alert('删除好友', '确认删除当前好友？', [
-                      { text: '取消', style: 'cancel' },
-                      {
-                        text: '删除',
-                        style: 'destructive',
-                        onPress: async () => {
-                          try {
-                            await friendStore.deleteFriend(resolvedAccountId)
-                            router.back()
-                          } catch (error) {
-                            Alert.alert(
-                              '删除失败',
-                              error instanceof Error ? error.message : '请稍后重试'
-                            )
-                          }
+                        if (value) {
+                          await friendStore.addToBlockList(resolvedAccountId)
+                        } else {
+                          await friendStore.removeFromBlockList(resolvedAccountId)
                         }
+                      } catch (error) {
+                        toast.alert(
+                          t('commonActionFailed'),
+                          getErrorMessage(error, getNetworkUnavailableMessage())
+                        )
                       }
-                    ])
-                  }
-                />
-              </View>
-            ) : null}
-          </>
-        ) : !isSelf ? (
-          <>
-            <View style={styles.group}>
-              <UIKitSwitchRow
-                label="加入黑名单"
-                value={isBlocked}
-                onValueChange={async (value: boolean) => {
-                  try {
-                    if (value) {
-                      await friendStore.addToBlockList(resolvedAccountId)
-                    } else {
-                      await friendStore.removeFromBlockList(resolvedAccountId)
-                    }
-                  } catch (error) {
-                    Alert.alert('操作失败', error instanceof Error ? error.message : '请稍后重试')
-                  }
-                }}
-              />
-            </View>
+                    }}
+                  />
+                </View>
+              ) : null}
 
-            <View style={styles.group}>
-              <UIKitActionCell
-                label="添加好友"
-                tone="primary"
-                onPress={async () => {
-                  try {
-                    await friendStore.addFriend(resolvedAccountId, postscript)
-                    Alert.alert('已发送', '好友申请已发送')
-                  } catch (error) {
-                    Alert.alert('发送失败', error instanceof Error ? error.message : '请稍后重试')
-                  }
-                }}
-              />
-            </View>
-          </>
-        ) : null}
-      </ScrollView>
+              {!isSelf ? (
+                <View style={styles.group}>
+                  <UIKitActionCell label={t('friendCardChat')} onPress={openChat} />
+                </View>
+              ) : null}
+
+              {!isSelf ? (
+                <View style={styles.group}>
+                  <UIKitActionCell
+                    label={t('friendCardDelete')}
+                    tone="danger"
+                    onPress={() =>
+                      Alert.alert(
+                        t('friendCardDelete'),
+                        t('friendCardDeleteConfirm', { name: title || resolvedAccountId }),
+                        [
+                          { text: t('actionCancel'), style: 'cancel' },
+                          {
+                            text: t('commonDelete'),
+                            style: 'destructive',
+                            onPress: handleDeleteFriend
+                          }
+                        ]
+                      )
+                    }
+                  />
+                </View>
+              ) : null}
+            </>
+          ) : !isSelf ? (
+            <>
+              {!isAIUser ? (
+                <View style={styles.group}>
+                  <UIKitActionCell
+                    label={t('friendCardAdd')}
+                    tone="primary"
+                    onPress={async () => {
+                      try {
+                        await ensureNetworkAvailable()
+                        await friendStore.addFriend(resolvedAccountId, postscript)
+                        toast.info(t('friendCardAddSentBody'))
+                      } catch (error) {
+                        toast.alert(
+                          t('commonSendFailed'),
+                          getErrorMessage(error, getNetworkUnavailableMessage())
+                        )
+                      }
+                    }}
+                  />
+                </View>
+              ) : null}
+            </>
+          ) : null}
+        </ScrollView>
+      )}
     </UIKitWhitePage>
   )
 })
@@ -236,11 +295,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5F6FA'
   },
   content: {
-    paddingBottom: 24
+    paddingBottom: 16
   },
   group: {
-    marginTop: 16,
+    marginTop: 12,
     backgroundColor: '#FFFFFF'
+  },
+  pendingState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center'
   }
 })
 

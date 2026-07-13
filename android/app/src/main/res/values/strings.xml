@@ -2,4 +2,18 @@
   <string name="app_name">im2-rn-demo</string>
   <string name="expo_system_ui_user_interface_style" translatable="false">automatic</string>
   <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
+  <string name="native_camera_keep_alive_title">正在拍摄</string>
+  <string name="native_camera_keep_alive_text">保持即时消息连接</string>
+  <string name="native_camera_keep_alive_channel">拍摄连接保持</string>
+  <string name="native_camera_capture_cancel">取消</string>
+  <string name="native_camera_capture_flash_off">闪光灯 关</string>
+  <string name="native_camera_capture_flash_on">闪光灯 开</string>
+  <string name="native_camera_capture_flash_unavailable">无闪光灯</string>
+  <string name="native_camera_capture_switch_camera">翻转镜头</string>
+  <string name="native_camera_capture_timer_default">00:00</string>
+  <string name="native_camera_capture_take_photo_tip">轻触拍照</string>
+  <string name="native_camera_capture_record_start_tip">轻触开始摄像</string>
+  <string name="native_camera_capture_record_starting">正在开始摄像...</string>
+  <string name="native_camera_capture_record_stop_tip">摄像中，轻触停止</string>
+  <string name="native_camera_capture_saving">处理中...</string>
 </resources>

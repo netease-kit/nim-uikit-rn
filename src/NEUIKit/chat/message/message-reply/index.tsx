@@ -106,7 +106,13 @@ const MessageReply: React.FC<MessageReplyProps> = observer(({ replyMsg }) => {
               </div>
             ) : replyMsg.messageType === V2NIMConst.V2NIMMessageType.V2NIM_MESSAGE_TYPE_FILE ? (
               <div className="other-msg-wrapper">
-                <a className="other-msg-wrapper-text" target="_blank" rel="noopener noreferrer" href={downloadUrl} download={name}>
+                <a
+                  className="other-msg-wrapper-text"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  href={downloadUrl}
+                  download={name}
+                >
                   {t('fileMsgTitleText')}
                 </a>
               </div>
@@ -148,7 +154,11 @@ const MessageReply: React.FC<MessageReplyProps> = observer(({ replyMsg }) => {
                 setIsFullScreen(false)
               }}
             >
-              <PreviewImage visible={isPreviewImgVisible} imageUrl={imageUrl} onClose={() => setIsPreviewImgVisible(false)} />
+              <PreviewImage
+                visible={isPreviewImgVisible}
+                imageUrl={imageUrl}
+                onClose={() => setIsPreviewImgVisible(false)}
+              />
             </div>
           ) : null}
         </div>

@@ -105,22 +105,40 @@ const ContactList: React.FC = observer(() => {
         <div className="contact-item-content">
           {/* 验证消息 */}
           <div className="contact-item" onClick={handleValidMsgClick}>
-            <Icon iconClassName="contact-item-icon contact-valid-icon" size={42} type="icon-yanzheng" style={{ color: '#fff' }} />
-            <Badge num={unreadSysMsgCount} style={{ position: 'absolute', top: '5px', left: '45px' }} />
+            <Icon
+              iconClassName="contact-item-icon contact-valid-icon"
+              size={42}
+              type="icon-yanzheng"
+              style={{ color: '#fff' }}
+            />
+            <Badge
+              num={unreadSysMsgCount}
+              style={{ position: 'absolute', top: '5px', left: '45px' }}
+            />
             <span className="contact-item-title">{t('validMsgText')}</span>
             <Icon iconClassName="more-icon" style={{ color: '#999' }} type="icon-jiantou" />
           </div>
 
           {/* 黑名单 */}
           <div className="contact-item" onClick={handleBlacklistClick}>
-            <Icon iconClassName="contact-item-icon contact-blacklist-icon" size={42} type="icon-lahei2" style={{ color: '#fff' }} />
+            <Icon
+              iconClassName="contact-item-icon contact-blacklist-icon"
+              size={42}
+              type="icon-lahei2"
+              style={{ color: '#fff' }}
+            />
             <span className="contact-item-title">{t('blacklistText')}</span>
             <Icon iconClassName="more-icon" style={{ color: '#999' }} type="icon-jiantou" />
           </div>
 
           {/* 群聊 */}
           <div className="contact-item" onClick={handleGroupContactClick}>
-            <Icon iconClassName="contact-item-icon contact-group-icon" size={42} type="icon-team2" style={{ color: '#fff' }} />
+            <Icon
+              iconClassName="contact-item-icon contact-group-icon"
+              size={42}
+              type="icon-team2"
+              style={{ color: '#fff' }}
+            />
             <span className="contact-item-title">{t('teamMenuText')}</span>
             <Icon iconClassName="more-icon" style={{ color: '#999' }} type="icon-jiantou" />
           </div>

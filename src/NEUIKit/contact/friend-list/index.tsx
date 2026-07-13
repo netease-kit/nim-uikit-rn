@@ -72,7 +72,11 @@ const FriendList: React.FC = observer(() => {
             <div className="friend-group-item" key={friendGroup.key}>
               <div className="friend-group-title">{friendGroup.key}</div>
               {friendGroup.data.map((friend) => (
-                <div className="friend-item" key={friend.accountId} onClick={() => handleFriendItemClick(friend)}>
+                <div
+                  className="friend-item"
+                  key={friend.accountId}
+                  onClick={() => handleFriendItemClick(friend)}
+                >
                   <Avatar account={friend.accountId} />
                   <div className="friend-name">{friend.appellation}</div>
                 </div>

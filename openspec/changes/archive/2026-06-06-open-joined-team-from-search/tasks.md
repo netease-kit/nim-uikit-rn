@@ -1,0 +1,4 @@
+- [x] Inspect RN team-join search result behavior.
+- [x] Compare Web/native UIKit behavior for already-joined team search results.
+- [x] Change already-joined team search result action to show "去聊天" and open the team chat.
+- [x] Validate TypeScript, target lint, and OpenSpec change.

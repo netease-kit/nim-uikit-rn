@@ -1,8 +1,11 @@
 # appearance-preferences Specification
 
 ## Purpose
+
 TBD - created by archiving change port-im-kit-react-ui-h5. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Appearance Selection Page
 
 The settings module SHALL provide an appearance-selection page reachable from settings and SHALL expose the theme options and current-selection indicator required by the tests.
@@ -29,4 +32,3 @@ The app SHALL persist the selected appearance and restore it after process resta
 
 - **WHEN** the user restarts the app after changing appearance
 - **THEN** the previously selected appearance is restored on launch
-

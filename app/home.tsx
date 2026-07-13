@@ -1,11 +1,14 @@
 import { router } from 'expo-router'
 import React from 'react'
 import { StyleSheet, TouchableOpacity, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { ThemedText } from '@/components/ThemedText'
 import { NEUIKitColors, UIKitIcon } from '@/src/NEUIKit/rn'
 
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets()
+
   return (
     <View style={styles.container}>
       <View style={styles.brand}>
@@ -13,11 +16,14 @@ export default function HomeScreen() {
         <ThemedText style={styles.brandName}>网易云信</ThemedText>
       </View>
 
-      <TouchableOpacity style={styles.loginButton} onPress={() => router.push('/login' as never)}>
+      <TouchableOpacity
+        style={[styles.loginButton, { bottom: Math.max(insets.bottom + 258, 292) }]}
+        onPress={() => router.push('/login' as never)}
+      >
         <ThemedText style={styles.loginButtonText}>注册/登录</ThemedText>
       </TouchableOpacity>
 
-      <View style={styles.footer}>
+      <View style={[styles.footer, { bottom: Math.max(insets.bottom + 44, 78) }]}>
         <UIKitIcon type="logo" width={18} height={18} />
         <ThemedText style={styles.footerText}>网易云信</ThemedText>
       </View>

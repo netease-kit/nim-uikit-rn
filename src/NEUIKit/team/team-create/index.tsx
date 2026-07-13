@@ -47,10 +47,15 @@ const TeamCreate: React.FC = observer(() => {
     setP2pConversationId(conversationId)
 
     // 获取好友列表
-    const list = store?.uiStore.friends.filter((item) => !store?.relationStore.blacklist.includes(item.accountId)) || []
+    const list =
+      store?.uiStore.friends.filter(
+        (item) => !store?.relationStore.blacklist.includes(item.accountId)
+      ) || []
 
     // 过滤掉当前会话的用户
-    const formattedList = list.map((item) => ({ accountId: item.accountId })).filter((item) => item.accountId !== conversationId)
+    const formattedList = list
+      .map((item) => ({ accountId: item.accountId }))
+      .filter((item) => item.accountId !== conversationId)
 
     setFriendList(formattedList)
   }, [])
@@ -158,7 +163,13 @@ const TeamCreate: React.FC = observer(() => {
         }
       />
       <div className="create-team-content">
-        <PersonSelect personList={friendList} onCheckboxChange={checkboxChange} radio={false} showBtn={false} max={200} />
+        <PersonSelect
+          personList={friendList}
+          onCheckboxChange={checkboxChange}
+          radio={false}
+          showBtn={false}
+          max={200}
+        />
       </div>
     </div>
   )

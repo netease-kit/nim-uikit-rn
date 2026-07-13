@@ -28,7 +28,13 @@ const Switch: React.FC<SwitchProps> = ({ checked, disabled = false, onChange }) 
 
   return (
     <label className={`nim-switch-wrapper ${disabled ? 'nim-disabled' : ''}`}>
-      <input type="checkbox" className="nim-switch-input" checked={checked} disabled={disabled} onChange={handleChange} />
+      <input
+        type="checkbox"
+        className="nim-switch-input"
+        checked={checked}
+        disabled={disabled}
+        onChange={handleChange}
+      />
       <div className="nim-switch-core"></div>
     </label>
   )

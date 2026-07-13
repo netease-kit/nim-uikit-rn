@@ -37,7 +37,15 @@ export interface ModalProps {
 /**
  * 模态对话框组件
  */
-const Modal: React.FC<ModalProps> = ({ title, confirmText = '确定', cancelText = '取消', visible, onConfirm, onCancel, children }) => {
+const Modal: React.FC<ModalProps> = ({
+  title,
+  confirmText = '确定',
+  cancelText = '取消',
+  visible,
+  onConfirm,
+  onCancel,
+  children
+}) => {
   // 如果不可见，则不渲染
   if (!visible) {
     return null

@@ -129,10 +129,18 @@ const TeamAvatarEdit: React.FC = observer(() => {
             <div className="choose-picture">
               <Icon size={24} type="choose-picture" />
             </div>
-            <input type="file" ref={fileInputRef} accept="image/*" style={{ display: 'none' }} onChange={onChangeAvatar} />
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={onChangeAvatar}
+            />
           </div>
         ) : (
-          <div className="avatar">{avatar && <img className="avatar-img" src={avatar} alt="avatar" />}</div>
+          <div className="avatar">
+            {avatar && <img className="avatar-img" src={avatar} alt="avatar" />}
+          </div>
         )}
       </div>
 
@@ -141,7 +149,13 @@ const TeamAvatarEdit: React.FC = observer(() => {
           <div className="tip">{t('chooseDefaultImage')}</div>
           <div className="avatar-arr">
             {avatarArr.map((src, index) => (
-              <img key={index} className="avatar-img" src={src} alt={`avatar-${index}`} onClick={() => setAvatarFromList(index)} />
+              <img
+                key={index}
+                className="avatar-img"
+                src={src}
+                alt={`avatar-${index}`}
+                onClick={() => setAvatarFromList(index)}
+              />
             ))}
           </div>
         </div>

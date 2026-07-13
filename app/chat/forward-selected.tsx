@@ -3,28 +3,69 @@ import { router, Stack } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React from 'react'
 import { FlatList, StyleSheet, TouchableOpacity, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
-import { UIKitChatHeaderTitle } from '@/src/NEUIKit/rn'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
 import {
-  conversationStore,
-  forwardStore,
-  friendStore,
-  nimStore,
-  teamStore,
-  userStore
-} from '@/stores'
+  getUIKitAppellation,
+  getUIKitAvatarUri,
+  getUIKitUserAvatarLabel,
+  UIKitChatHeaderTitle,
+  UIKitIcon
+} from '@/src/NEUIKit/rn'
+import { conversationStore, forwardStore, friendStore, nimStore, teamStore } from '@/stores'
 import { V2NIMConversationType } from '@/utils/nim-sdk'
 
 type SelectedTarget = {
   conversationId: string
   title: string
-  subtitle: string
   avatar?: string
+  targetId: string
+  conversationType: V2NIMConversationType
+  memberCount?: number
+}
+
+const FORWARD_SELECTED_INITIAL_RENDER_COUNT = 10
+const FORWARD_SELECTED_BATCH_RENDER_COUNT = 8
+const FORWARD_SELECTED_WINDOW_SIZE = 8
+
+function getSelectedTitle(
+  targetId: string,
+  conversationType: V2NIMConversationType,
+  fallbackName?: string
+) {
+  if (conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM) {
+    return fallbackName || targetId
+  }
+
+  return getUIKitAppellation({ account: targetId }) || fallbackName || targetId
+}
+
+function getSelectedAvatar(
+  targetId: string,
+  conversationType: V2NIMConversationType,
+  explicitAvatar?: string
+) {
+  if (conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM) {
+    return explicitAvatar || ''
+  }
+
+  return getUIKitAvatarUri(targetId, explicitAvatar)
+}
+
+function getSelectedAvatarLabel(item: SelectedTarget) {
+  if (item.conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM) {
+    return item.title.slice(0, 1).toUpperCase()
+  }
+
+  return getUIKitUserAvatarLabel({ account: item.targetId }).toUpperCase()
 }
 
 const ForwardSelectedScreen = observer(() => {
+  const { t } = useAppTranslation()
+  const insets = useSafeAreaInsets()
   const selectedTargets = forwardStore.selectedConversationIds
     .map((conversationId) => {
       if (!nimStore.nim) {
@@ -41,17 +82,22 @@ const ForwardSelectedScreen = observer(() => {
 
       return {
         conversationId,
-        title:
-          conversation?.name ||
-          team?.name ||
-          friend?.alias ||
-          friend?.userProfile?.name ||
-          userStore.getDisplayName(targetId),
-        subtitle:
+        targetId,
+        conversationType,
+        title: getSelectedTitle(
+          targetId,
+          conversationType,
+          conversation?.name || team?.name || friend?.userProfile?.name
+        ),
+        avatar: getSelectedAvatar(
+          targetId,
+          conversationType,
+          conversation?.avatar || team?.avatar || friend?.userProfile?.avatar
+        ),
+        memberCount:
           conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
-            ? `群聊 · ${targetId}`
-            : targetId,
-        avatar: conversation?.avatar || team?.avatar || friend?.userProfile?.avatar
+            ? team?.memberCount || teamStore.getMembers(targetId).length || 0
+            : undefined
       } as SelectedTarget
     })
     .filter(Boolean) as SelectedTarget[]
@@ -60,42 +106,33 @@ const ForwardSelectedScreen = observer(() => {
     <ThemedView style={styles.container}>
       <Stack.Screen
         options={{
-          headerTitle: () => <UIKitChatHeaderTitle title="已选择" />,
+          headerTitle: () => <UIKitChatHeaderTitle title={t('forwardSelectedTitle')} />,
           headerTitleAlign: 'center',
           headerShadowVisible: false,
-          headerStyle: { backgroundColor: '#FFFFFF' }
+          headerStyle: { backgroundColor: '#FFFFFF' },
+          headerRight: () => (
+            <TouchableOpacity onPress={() => router.back()} hitSlop={10}>
+              <ThemedText style={styles.headerCancelText}>{t('actionCancel')}</ThemedText>
+            </TouchableOpacity>
+          )
         }}
       />
-
-      <View style={styles.hero}>
-        <ThemedText style={styles.heroTitle}>发送给</ThemedText>
-        <View style={styles.heroAvatarRow}>
-          {selectedTargets.slice(0, 6).map((item) =>
-            item.avatar ? (
-              <Image
-                key={item.conversationId}
-                source={item.avatar}
-                style={styles.heroAvatar}
-                contentFit="cover"
-              />
-            ) : (
-              <View key={item.conversationId} style={styles.heroAvatarFallback}>
-                <ThemedText style={styles.heroAvatarText}>
-                  {item.title.slice(0, 1).toUpperCase()}
-                </ThemedText>
-              </View>
-            )
-          )}
-        </View>
-      </View>
 
       <FlatList
         data={selectedTargets}
         keyExtractor={(item) => item.conversationId}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[
+          styles.listContent,
+          { paddingBottom: Math.max(insets.bottom + 20, 120) }
+        ]}
+        removeClippedSubviews
+        initialNumToRender={FORWARD_SELECTED_INITIAL_RENDER_COUNT}
+        maxToRenderPerBatch={FORWARD_SELECTED_BATCH_RENDER_COUNT}
+        windowSize={FORWARD_SELECTED_WINDOW_SIZE}
+        updateCellsBatchingPeriod={16}
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <ThemedText style={styles.emptyText}>暂无已选择会话</ThemedText>
+            <ThemedText style={styles.emptyText}>{t('forwardSelectedEmpty')}</ThemedText>
           </View>
         }
         renderItem={({ item }) => (
@@ -106,32 +143,36 @@ const ForwardSelectedScreen = observer(() => {
               ) : (
                 <View style={styles.avatarFallback}>
                   <ThemedText style={styles.avatarFallbackText}>
-                    {item.title.slice(0, 1).toUpperCase()}
+                    {getSelectedAvatarLabel(item)}
                   </ThemedText>
                 </View>
               )}
               <View style={styles.meta}>
-                <ThemedText numberOfLines={1} style={styles.title}>
-                  {item.title}
-                </ThemedText>
-                <ThemedText numberOfLines={1} style={styles.subtitle}>
-                  {item.subtitle}
-                </ThemedText>
+                {item.conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM ? (
+                  <View style={styles.titleRow}>
+                    <ThemedText numberOfLines={1} style={styles.title}>
+                      {item.title}
+                    </ThemedText>
+                    <ThemedText style={styles.memberCountText}>
+                      ({item.memberCount || 0})
+                    </ThemedText>
+                  </View>
+                ) : (
+                  <ThemedText numberOfLines={1} style={styles.title}>
+                    {item.title}
+                  </ThemedText>
+                )}
               </View>
             </View>
             <TouchableOpacity
               style={styles.removeButton}
               onPress={() => forwardStore.removeConversation(item.conversationId)}
             >
-              <ThemedText style={styles.removeButtonText}>移除</ThemedText>
+              <UIKitIcon type="icon-guanbi" size={14} tintColor="#B4BCC7" />
             </TouchableOpacity>
           </View>
         )}
       />
-
-      <TouchableOpacity style={styles.submitButton} onPress={() => router.back()}>
-        <ThemedText style={styles.submitText}>完成</ThemedText>
-      </TouchableOpacity>
     </ThemedView>
   )
 })
@@ -139,47 +180,16 @@ const ForwardSelectedScreen = observer(() => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F7FB'
+    backgroundColor: '#FFFFFF'
   },
-  hero: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 22,
-    paddingTop: 16,
-    paddingBottom: 20,
-    gap: 14
-  },
-  heroTitle: {
-    color: '#2D3541',
-    fontSize: 28,
-    lineHeight: 36,
-    fontWeight: '800'
-  },
-  heroAvatarRow: {
-    flexDirection: 'row',
-    gap: 14
-  },
-  heroAvatar: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: '#D8E0EA'
-  },
-  heroAvatarFallback: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: '#337EFF',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  heroAvatarText: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '700'
+  headerCancelText: {
+    color: '#337EFF',
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '600'
   },
   listContent: {
-    paddingHorizontal: 20,
-    paddingTop: 18,
+    paddingHorizontal: 16,
     paddingBottom: 120
   },
   emptyState: {
@@ -194,11 +204,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    borderRadius: 22,
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-    marginBottom: 12
+    paddingHorizontal: 4,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E8ECF1'
   },
   rowMain: {
     flexDirection: 'row',
@@ -206,71 +216,51 @@ const styles = StyleSheet.create({
     flex: 1
   },
   avatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: '#D1D5DB'
   },
   avatarFallback: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: '#337EFF',
     alignItems: 'center',
     justifyContent: 'center'
   },
   avatarFallbackText: {
     color: '#FFFFFF',
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: '700'
   },
   meta: {
     flex: 1,
-    marginLeft: 14,
-    gap: 4
+    marginLeft: 12
   },
   title: {
+    flexShrink: 1,
     color: '#2E3541',
     fontSize: 17,
     lineHeight: 24,
     fontWeight: '700'
   },
-  subtitle: {
-    color: '#9BA6B5',
-    fontSize: 13,
-    lineHeight: 18
-  },
-  removeButton: {
-    minHeight: 34,
-    borderRadius: 17,
-    paddingHorizontal: 14,
-    backgroundColor: '#FFF1EF',
+  titleRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 12
+    minWidth: 0
   },
-  removeButtonText: {
-    color: '#FF6C63',
-    fontSize: 13,
-    lineHeight: 18,
+  memberCountText: {
+    flexShrink: 0,
+    color: '#2E3541',
+    fontSize: 17,
+    lineHeight: 24,
     fontWeight: '700'
   },
-  submitButton: {
-    position: 'absolute',
-    left: 20,
-    right: 20,
-    bottom: 30,
-    minHeight: 54,
-    borderRadius: 20,
-    backgroundColor: '#337EFF',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  submitText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    lineHeight: 22,
-    fontWeight: '800'
+  removeButton: {
+    marginLeft: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4
   }
 })
 

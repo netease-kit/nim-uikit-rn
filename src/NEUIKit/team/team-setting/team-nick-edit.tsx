@@ -31,7 +31,9 @@ const TeamNickEdit: React.FC = observer(() => {
   const [teamId, setTeamId] = useState(id)
   // 我的成员信息
   // const [myMemberInfo, setMyMemberInfo] = useState<V2NIMTeamMember>()
-  const myMemberInfo = store.teamMemberStore.getTeamMember(id, [store.userStore.myUserInfo.accountId])[0]
+  const myMemberInfo = store.teamMemberStore.getTeamMember(id, [
+    store.userStore.myUserInfo.accountId
+  ])[0]
 
   // 输入变化
   const onInputChange = useCallback((value: string) => {
@@ -96,7 +98,9 @@ const TeamNickEdit: React.FC = observer(() => {
           value={inputValue}
           placeholder={t('nickInTeam')}
         />
-        <div onClick={clearInputValue}>{showClearIcon && <Icon iconClassName="clear-icon" type="icon-shandiao" />}</div>
+        <div onClick={clearInputValue}>
+          {showClearIcon && <Icon iconClassName="clear-icon" type="icon-shandiao" />}
+        </div>
       </div>
     </div>
   )

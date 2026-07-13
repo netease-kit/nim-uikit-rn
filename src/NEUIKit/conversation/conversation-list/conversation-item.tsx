@@ -7,7 +7,10 @@ import Icon from '@/NEUIKit/common/components/Icon'
 import { useTranslation } from '@/NEUIKit/common/hooks/useTranslate'
 import { useStateContext } from '@/NEUIKit/common/hooks/useStateContext'
 import { V2NIMConst } from 'nim-web-sdk-ng/dist/esm/nim'
-import type { V2NIMConversationForUI, V2NIMLocalConversationForUI } from '@xkit-yx/im-store-v2/dist/types/types'
+import type {
+  V2NIMConversationForUI,
+  V2NIMLocalConversationForUI
+} from '@xkit-yx/im-store-v2/dist/types/types'
 import ConversationItemRead from './conversation-item-read'
 import LastMsgContent from './conversation-item-last-msg-content'
 import './conversation-item.less'
@@ -59,10 +62,15 @@ const ConversationItem: React.FC<ConversationItemProps> = observer(
     }
 
     // 获取会话目标ID
-    const to = store.nim.V2NIMConversationIdUtil.parseConversationTargetId(conversation.conversationId)
+    const to = store.nim.V2NIMConversationIdUtil.parseConversationTargetId(
+      conversation.conversationId
+    )
 
     // 获取群头像
-    const teamAvatar = conversation.type === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM ? conversation.avatar : undefined
+    const teamAvatar =
+      conversation.type === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
+        ? conversation.avatar
+        : undefined
 
     // 获取会话名称
     const sessionName = conversation.name || conversation.conversationId
@@ -84,7 +92,12 @@ const ConversationItem: React.FC<ConversationItemProps> = observer(
 
     // 未读数量显示格式化
     const max = 99
-    const unread = conversation.unreadCount > 0 ? (conversation.unreadCount > max ? `${max}+` : `${conversation.unreadCount}`) : ''
+    const unread =
+      conversation.unreadCount > 0
+        ? conversation.unreadCount > max
+          ? `${max}+`
+          : `${conversation.unreadCount}`
+        : ''
 
     // 是否静音
     const isMute = !!conversation.mute
@@ -99,10 +112,14 @@ const ConversationItem: React.FC<ConversationItemProps> = observer(
       if (conversation.type === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P) {
         return (
           conversation?.lastMessage?.messageRefer.senderId === myUserAccountId &&
-          conversation?.lastMessage?.messageType !== V2NIMConst.V2NIMMessageType.V2NIM_MESSAGE_TYPE_CALL &&
-          conversation?.lastMessage?.messageType !== V2NIMConst.V2NIMMessageType.V2NIM_MESSAGE_TYPE_NOTIFICATION &&
-          conversation?.lastMessage?.sendingState === V2NIMConst.V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED &&
-          conversation?.lastMessage?.lastMessageState !== V2NIMConst.V2NIMLastMessageState.V2NIM_MESSAGE_STATUS_REVOKE
+          conversation?.lastMessage?.messageType !==
+            V2NIMConst.V2NIMMessageType.V2NIM_MESSAGE_TYPE_CALL &&
+          conversation?.lastMessage?.messageType !==
+            V2NIMConst.V2NIMMessageType.V2NIM_MESSAGE_TYPE_NOTIFICATION &&
+          conversation?.lastMessage?.sendingState ===
+            V2NIMConst.V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED &&
+          conversation?.lastMessage?.lastMessageState !==
+            V2NIMConst.V2NIMLastMessageState.V2NIM_MESSAGE_STATUS_REVOKE
         )
       }
 
@@ -142,21 +159,35 @@ const ConversationItem: React.FC<ConversationItemProps> = observer(
     }
 
     // CSS 类名
-    const containerClassName = ['nim-conversation-item-container', showMoreActions ? 'show-action-list' : '', conversation.stickTop ? 'stick-on-top' : '']
+    const containerClassName = [
+      'nim-conversation-item-container',
+      showMoreActions ? 'show-action-list' : '',
+      conversation.stickTop ? 'stick-on-top' : ''
+    ]
       .filter(Boolean)
       .join(' ')
 
     return (
-      <div className={containerClassName} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onClick={handleConversationItemClick}>
+      <div
+        className={containerClassName}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onClick={handleConversationItemClick}
+      >
         <div className="conversation-item-content">
           <div className="conversation-item-left">
-            {unread && <div className="unread">{isMute ? <div className="dot"></div> : <div className="badge">{unread}</div>}</div>}
+            {unread && (
+              <div className="unread">
+                {isMute ? <div className="dot"></div> : <div className="badge">{unread}</div>}
+              </div>
+            )}
             <Avatar account={to} avatar={teamAvatar} />
           </div>
 
           <div className="conversation-item-right">
             <div className="conversation-item-top">
-              {conversation.type === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P ? (
+              {conversation.type ===
+              V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P ? (
                 <Appellation className="conversation-item-title" account={to} />
               ) : (
                 <span className="conversation-item-title">{sessionName}</span>
@@ -166,7 +197,9 @@ const ConversationItem: React.FC<ConversationItemProps> = observer(
 
             <div className="conversation-item-desc">
               <span className="conversation-item-desc-span">
-                {beMentioned && <span className="beMentioned">{`[${t('someoneText')}@${t('meText')}]`}</span>}
+                {beMentioned && (
+                  <span className="beMentioned">{`[${t('someoneText')}@${t('meText')}]`}</span>
+                )}
 
                 {showSessionUnread && <ConversationItemRead conversation={conversation} />}
 
@@ -178,7 +211,13 @@ const ConversationItem: React.FC<ConversationItemProps> = observer(
               </span>
 
               <div className="conversation-item-state">
-                {isMute && <Icon iconClassName="conversation-item-desc-state" style={{ color: '#ccc' }} type="icon-xiaoximiandarao" />}
+                {isMute && (
+                  <Icon
+                    iconClassName="conversation-item-desc-state"
+                    style={{ color: '#ccc' }}
+                    type="icon-xiaoximiandarao"
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -186,7 +225,11 @@ const ConversationItem: React.FC<ConversationItemProps> = observer(
 
         <div className="right-action-list">
           {moreActions.map((action) => (
-            <div key={action.type} className={`right-action-item ${action.class}`} onClick={(e) => handleActionClick(action.type, e)}>
+            <div
+              key={action.type}
+              className={`right-action-item ${action.class}`}
+              onClick={(e) => handleActionClick(action.type, e)}
+            >
               {action.name}
             </div>
           ))}

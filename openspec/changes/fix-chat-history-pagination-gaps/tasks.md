@@ -1,0 +1,3 @@
+- [x] 1. 对齐 RN 聊天历史首屏与上滑分页参数到原生端基线
+- [x] 2. 验证历史消息在连续上滑时不再出现分页边界缺失
+- [x] 3. 运行 `npx tsc --noEmit`、`npm run lint`、`npm run start -- --non-interactive` 与 `OPENSPEC_TELEMETRY=0 openspec validate fix-chat-history-pagination-gaps --type change --no-interactive`

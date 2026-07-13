@@ -1,26 +1,43 @@
-import { Stack, useLocalSearchParams } from 'expo-router'
+import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React, { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
 import {
   getUIKitAppellation,
   UIKitChatEmptyState,
-  UIKitChatHeaderTitle,
   UIKitChatMemberRow,
+  UIKitHeaderBackButton,
   UIKitSegmentTabs
 } from '@/src/NEUIKit/rn'
 import { messageStore, nimStore, teamStore, userStore } from '@/stores'
+import { getDisplayErrorMessage } from '@/utils/error-message'
 
 const ReadDetailScreen = observer(() => {
-  const { conversationId, messageId, teamId } = useLocalSearchParams<{
+  const { t } = useAppTranslation()
+  const insets = useSafeAreaInsets()
+  const {
+    conversationId,
+    readConversationId: routeReadConversationId,
+    messageId,
+    teamId
+  } = useLocalSearchParams<{
     conversationId?: string
+    readConversationId?: string
     messageId?: string
     teamId?: string
   }>()
-  const resolvedConversationId = typeof conversationId === 'string' ? conversationId : ''
+  const readConversationId =
+    typeof routeReadConversationId === 'string'
+      ? routeReadConversationId
+      : typeof conversationId === 'string'
+        ? conversationId
+        : ''
+  const resolvedConversationId = readConversationId
   const resolvedMessageId = typeof messageId === 'string' ? messageId : ''
   const resolvedTeamId = typeof teamId === 'string' ? teamId : ''
   const currentUserId = nimStore.getLoginUser()
@@ -62,25 +79,31 @@ const ReadDetailScreen = observer(() => {
 
   useEffect(() => {
     loadDetail().catch((error) => {
-      setLoadError(error instanceof Error ? error.message : '阅读状态加载失败')
+      setLoadError(getDisplayErrorMessage(error, t('readDetailLoadFailed')))
       setLoading(false)
     })
-  }, [loadDetail])
+  }, [loadDetail, t])
 
   const currentList =
     activeTab === 'read' ? (detail?.readAccountList ?? []) : (detail?.unreadAccountList ?? [])
-  const currentEmptyText = activeTab === 'read' ? '全部成员暂未读' : '全部成员已读'
+  const currentEmptyText = activeTab === 'read' ? t('readDetailAllUnread') : t('readDetailAllRead')
 
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen
         options={{
-          headerTitle: () => <UIKitChatHeaderTitle title="消息阅读状态" />,
-          headerTitleAlign: 'center',
-          headerShadowVisible: false,
-          headerStyle: { backgroundColor: '#FFFFFF' }
+          headerShown: false
         }}
       />
+      <View style={[styles.header, { paddingTop: insets.top }]}>
+        <View style={styles.headerSide}>
+          <UIKitHeaderBackButton onPress={() => router.back()} />
+        </View>
+        <ThemedText numberOfLines={1} style={styles.headerTitle}>
+          {t('readDetailTitle')}
+        </ThemedText>
+        <View style={styles.headerSide} />
+      </View>
 
       {loading ? (
         <View style={styles.centerState}>
@@ -93,25 +116,31 @@ const ReadDetailScreen = observer(() => {
             style={styles.retryButton}
             onPress={() => {
               loadDetail().catch((error) => {
-                setLoadError(error instanceof Error ? error.message : '阅读状态加载失败')
+                setLoadError(getDisplayErrorMessage(error, t('readDetailLoadFailed')))
                 setLoading(false)
               })
             }}
           >
-            <ThemedText style={styles.retryText}>重试</ThemedText>
+            <ThemedText style={styles.retryText}>{t('commonRetry')}</ThemedText>
           </TouchableOpacity>
         </View>
       ) : !detail ? (
         <UIKitChatEmptyState
-          title="暂无阅读状态"
-          description="当前消息还没有可展示的已读未读详情。"
+          title={t('readDetailEmptyTitle')}
+          description={t('readDetailEmptyDescription')}
         />
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
           <UIKitSegmentTabs
             items={[
-              { key: 'read', label: `已读(${detail.readReceipt.readCount})` },
-              { key: 'unread', label: `未读(${detail.readReceipt.unreadCount})` }
+              {
+                key: 'read',
+                label: t('readDetailReadTab', { count: detail.readReceipt.readCount })
+              },
+              {
+                key: 'unread',
+                label: t('readDetailUnreadTab', { count: detail.readReceipt.unreadCount })
+              }
             ]}
             activeKey={activeTab}
             onChange={setActiveTab}
@@ -125,7 +154,7 @@ const ReadDetailScreen = observer(() => {
             ) : (
               <UIKitChatEmptyState
                 title={currentEmptyText}
-                description="阅读状态会随着消息回执实时更新。"
+                description={t('readDetailRealtimeDescription')}
               />
             )}
           </View>
@@ -145,6 +174,29 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F5F7FB'
+  },
+  header: {
+    minHeight: 44,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#ECF0F5',
+    flexDirection: 'row',
+    alignItems: 'flex-end'
+  },
+  headerSide: {
+    width: 56,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  headerTitle: {
+    flex: 1,
+    height: 44,
+    color: '#111827',
+    fontSize: 17,
+    lineHeight: 44,
+    fontWeight: '700',
+    textAlign: 'center'
   },
   centerState: {
     flex: 1,

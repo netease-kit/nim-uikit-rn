@@ -1,0 +1,5 @@
+- [x] Inspect current image, video, and file attachment source selection.
+- [x] Add shared attachment source normalization helpers.
+- [x] Update file message download/open and file detail flows.
+- [x] Keep image and video render behavior aligned with normalized source selection.
+- [x] Validate TypeScript, lint, and OpenSpec change.

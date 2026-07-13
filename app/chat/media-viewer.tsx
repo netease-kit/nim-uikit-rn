@@ -1,170 +1,171 @@
 import { Ionicons } from '@expo/vector-icons'
-import { Image } from 'expo-image'
+import { Image as ExpoImage } from 'expo-image'
+import * as MediaLibrary from 'expo-media-library'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
+import { useVideoPlayer, VideoSource, VideoView } from 'expo-video'
 import { observer } from 'mobx-react-lite'
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert,
+  ActivityIndicator,
+  AppState,
+  AppStateStatus,
+  DeviceEventEmitter,
   FlatList,
-  LayoutChangeEvent,
+  Image as RNImage,
   NativeScrollEvent,
   NativeSyntheticEvent,
-  Pressable,
-  ScrollView,
+  Platform,
   StyleSheet,
   TouchableOpacity,
   useWindowDimensions,
   View
 } from 'react-native'
-import { WebView, WebViewMessageEvent } from 'react-native-webview'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import { UIKitChatEmptyState } from '@/src/NEUIKit/rn'
 import { messageStore } from '@/stores'
 import { persistFileToLocal, resolveFileName } from '@/utils/fileTransfer'
+import { getImageRenderSource, getVideoRenderSource } from '@/utils/media-source'
+import { saveNativeMediaToLibrary } from '@/utils/native-media-library-saver'
 import {
   V2NIMMessage,
   V2NIMMessageImageAttachment,
   V2NIMMessageType,
   V2NIMMessageVideoAttachment
 } from '@/utils/nim-sdk'
+import { ensureMediaLibrarySavePermission } from '@/utils/permissions'
 
-type VideoState = {
-  paused: boolean
-  currentTime: number
-  duration: number
-}
+const AUDIO_VIDEO_CALL_INTERRUPTION_EVENTS = [
+  'nim-audio-video-call-started',
+  'NIMAudioVideoCallStarted',
+  'NIMAudioVideoCallInterrupted'
+]
+const loadedMediaViewerImageUris = new Set<string>()
 
-function getMediaSource(
-  attachment?: V2NIMMessageImageAttachment | V2NIMMessageVideoAttachment | null
-) {
-  return attachment?.path || attachment?.url || ''
-}
+function MediaViewerImage({
+  uri,
+  onLoadStart,
+  onLoad,
+  onError
+}: {
+  uri: string
+  onLoadStart: () => void
+  onLoad: () => void
+  onError: () => void
+}) {
+  if (Platform.OS === 'android') {
+    return (
+      <RNImage
+        source={{ uri }}
+        style={styles.image}
+        resizeMode="contain"
+        fadeDuration={0}
+        onLoadStart={onLoadStart}
+        onLoad={onLoad}
+        onError={onError}
+      />
+    )
+  }
 
-function getMessageSource(message: V2NIMMessage | null) {
-  return getMediaSource(
-    message?.attachment as V2NIMMessageImageAttachment | V2NIMMessageVideoAttachment | undefined
+  return (
+    <ExpoImage
+      source={uri}
+      style={styles.image}
+      contentFit="contain"
+      cachePolicy="memory-disk"
+      transition={0}
+      onLoadStart={onLoadStart}
+      onLoad={onLoad}
+      onError={onError}
+    />
   )
 }
 
-function formatDuration(seconds: number) {
-  const safeSeconds = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0
-  const minutes = Math.floor(safeSeconds / 60)
-  const restSeconds = safeSeconds % 60
-  return `${minutes.toString().padStart(2, '0')}:${restSeconds.toString().padStart(2, '0')}`
+function getImageSource(attachment?: V2NIMMessageImageAttachment | null) {
+  return getImageRenderSource(attachment)
 }
 
-function escapeHtmlAttribute(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+function getVideoSource(attachment?: V2NIMMessageVideoAttachment | null) {
+  return getVideoRenderSource(attachment)
 }
 
-function buildVideoHtml(source: string) {
-  const safeSource = escapeHtmlAttribute(source)
+function getMessageSource(message: V2NIMMessage | null) {
+  if (!message) {
+    return ''
+  }
 
-  return `
-    <!doctype html>
-    <html lang="zh-CN">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-        <style>
-          html, body {
-            margin: 0;
-            width: 100%;
-            height: 100%;
-            background: #000;
-            overflow: hidden;
-          }
-          #player {
-            width: 100vw;
-            height: 100vh;
-            object-fit: contain;
-            background: #000;
-          }
-        </style>
-      </head>
-      <body>
-        <video id="player" playsinline webkit-playsinline preload="metadata" src="${safeSource}"></video>
-        <script>
-          const video = document.getElementById('player');
-          const post = () => {
-            const payload = {
-              type: 'state',
-              paused: video.paused,
-              currentTime: video.currentTime || 0,
-              duration: video.duration || 0
-            };
-            window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(payload));
-          };
+  if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_IMAGE) {
+    return getImageRenderSource(message.attachment as V2NIMMessageImageAttachment | undefined)
+  }
 
-          window.__rnTogglePlay = () => {
-            if (video.paused) {
-              video.play().catch(() => {});
-            } else {
-              video.pause();
-            }
-            true;
-          };
+  if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_VIDEO) {
+    return getVideoRenderSource(message.attachment as V2NIMMessageVideoAttachment | undefined)
+  }
 
-          window.__rnPause = () => {
-            video.pause();
-            true;
-          };
+  return ''
+}
 
-          window.__rnPlay = () => {
-            video.play().catch(() => {});
-            true;
-          };
+function getExtensionFromName(fileName?: string | null) {
+  const normalizedName = fileName?.trim()
+  const extensionMatch = normalizedName?.match(/\.([A-Za-z0-9]{1,12})$/)
 
-          window.__rnSeek = (nextTime) => {
-            if (!Number.isFinite(nextTime)) {
-              return true;
-            }
-            video.currentTime = Math.max(0, Math.min(video.duration || 0, nextTime));
-            post();
-            true;
-          };
+  return extensionMatch?.[1]?.toLowerCase() || ''
+}
 
-          ['loadedmetadata', 'timeupdate', 'pause', 'play', 'ended'].forEach((eventName) => {
-            video.addEventListener(eventName, post);
-          });
+function normalizeExtension(extension?: string | null) {
+  return extension?.trim().replace(/^\./, '').toLowerCase() || ''
+}
 
-          post();
-        </script>
-      </body>
-    </html>
-  `
+function getVideoSourceExtension(uri: string, name?: string, ext?: string) {
+  return (
+    normalizeExtension(ext) ||
+    getExtensionFromName(name) ||
+    getExtensionFromName(decodeURIComponent(uri.split('?')[0] || ''))
+  )
+}
+
+function buildNativeVideoSource(uri: string, name?: string, ext?: string): VideoSource {
+  const extension = getVideoSourceExtension(uri, name, ext)
+
+  return {
+    uri,
+    contentType: 'progressive',
+    metadata: {
+      title: name || (extension ? `video.${extension}` : 'video')
+    }
+  }
 }
 
 const MediaViewerScreen = observer(() => {
-  const { conversationId, messageId, uri, type } = useLocalSearchParams<{
+  const { t } = useAppTranslation()
+  const { conversationId, messageId, uri, type, name, ext, single } = useLocalSearchParams<{
     conversationId?: string
     messageId?: string
     uri?: string
     type?: string
+    name?: string
+    ext?: string
+    single?: string
   }>()
   const resolvedConversationId = typeof conversationId === 'string' ? conversationId : ''
   const resolvedMessageId = typeof messageId === 'string' ? messageId : ''
   const resolvedUri = typeof uri === 'string' ? uri : ''
   const resolvedType = typeof type === 'string' ? type : ''
+  const resolvedName = typeof name === 'string' ? name : ''
+  const resolvedExt = typeof ext === 'string' ? ext : ''
+  const singleMode = single === '1'
   const message = messageStore.getMessageById(resolvedConversationId, resolvedMessageId)
-  const { width } = useWindowDimensions()
+  const { width, height } = useWindowDimensions()
+  const insets = useSafeAreaInsets()
   const imageListRef = useRef<FlatList<{ key: string; uri: string }>>(null)
-  const videoWebViewRef = useRef<WebView>(null)
-  const [videoState, setVideoState] = useState<VideoState>({
-    paused: true,
-    currentTime: 0,
-    duration: 0
-  })
-  const [progressTrackWidth, setProgressTrackWidth] = useState(0)
+  const [loadingImageUris, setLoadingImageUris] = useState<Record<string, boolean>>({})
 
   const conversationImages = useMemo(() => {
-    if (!resolvedConversationId) {
+    if (singleMode || !resolvedConversationId || resolvedUri) {
       return []
     }
 
@@ -176,7 +177,7 @@ const MediaViewerScreen = observer(() => {
         uri: getMessageSource(item)
       }))
       .filter((item) => !!item.uri)
-  }, [resolvedConversationId])
+  }, [resolvedConversationId, resolvedUri, singleMode])
   const initialImageIndex = useMemo(() => {
     if (!conversationImages.length || !resolvedMessageId) {
       return 0
@@ -187,78 +188,92 @@ const MediaViewerScreen = observer(() => {
   }, [conversationImages, resolvedMessageId])
   const [imageIndex, setImageIndex] = useState(initialImageIndex)
 
+  useEffect(() => {
+    setImageIndex(initialImageIndex)
+  }, [initialImageIndex])
+
+  useEffect(() => {
+    if (!conversationImages.length || initialImageIndex === 0) {
+      return
+    }
+
+    const timer = setTimeout(() => {
+      imageListRef.current?.scrollToIndex({
+        index: initialImageIndex,
+        animated: false
+      })
+    }, 0)
+
+    return () => clearTimeout(timer)
+  }, [conversationImages.length, initialImageIndex])
+
   const mediaSource =
-    getMediaSource(
-      message?.attachment as V2NIMMessageImageAttachment | V2NIMMessageVideoAttachment | undefined
-    ) || resolvedUri
+    (message?.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_VIDEO || resolvedType === 'video'
+      ? getVideoSource(message?.attachment as V2NIMMessageVideoAttachment | undefined)
+      : getImageSource(message?.attachment as V2NIMMessageImageAttachment | undefined)) ||
+    resolvedUri
 
   const saveMedia = async () => {
     if (!mediaSource) {
-      Alert.alert('保存失败', '媒体资源不存在')
+      toast.alert(t('mediaViewerSaveFailedTitle'), t('mediaViewerMissingMedia'))
       return
     }
 
-    const fileName = resolveFileName(mediaSource)
-    await persistFileToLocal(mediaSource, fileName)
-    Alert.alert('保存成功', '媒体已保存到本地文件')
-  }
-
-  const openOriginal = async () => {
-    if (!mediaSource) {
-      Alert.alert('打开失败', '原始媒体地址不存在')
+    const imageAttachment = message?.attachment as V2NIMMessageImageAttachment | undefined
+    const videoAttachment = message?.attachment as V2NIMMessageVideoAttachment | undefined
+    const preferredName =
+      message?.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_VIDEO || resolvedType === 'video'
+        ? videoAttachment?.name || resolvedName
+        : imageAttachment?.name || resolvedName
+    const preferredNameExtension = getExtensionFromName(preferredName)
+    const preferredExtension =
+      message?.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_VIDEO || resolvedType === 'video'
+        ? videoAttachment?.ext || resolvedExt || preferredNameExtension || 'mp4'
+        : imageAttachment?.ext || resolvedExt || preferredNameExtension || 'jpg'
+    const isVideo =
+      message?.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_VIDEO || resolvedType === 'video'
+    if (!(await ensureMediaLibrarySavePermission())) {
       return
     }
 
-    router.push({
-      pathname: '/chat/message-preview',
-      params: {
-        title: '原始地址',
-        content: mediaSource
-      }
-    } as never)
-  }
-
-  const sendVideoCommand = (command: string) => {
-    videoWebViewRef.current?.injectJavaScript(`${command}; true;`)
-  }
-
-  const handleVideoMessage = (event: WebViewMessageEvent) => {
     try {
-      const payload = JSON.parse(event.nativeEvent.data) as Partial<VideoState> & { type?: string }
+      const fileName = resolveFileName(mediaSource, preferredName, preferredExtension)
+      const localUri = await persistFileToLocal(mediaSource, fileName)
 
-      if (payload.type !== 'state') {
-        return
+      if (Platform.OS === 'android') {
+        const result = await saveNativeMediaToLibrary(localUri, isVideo ? 'video' : 'image')
+
+        if (!result) {
+          toast.alert(t('mediaViewerSaveFailedTitle'), t('mediaViewerSaveUnsupported'))
+          return
+        }
+      } else {
+        await MediaLibrary.saveToLibraryAsync(localUri)
       }
-
-      setVideoState({
-        paused: !!payload.paused,
-        currentTime: payload.currentTime || 0,
-        duration: payload.duration || 0
-      })
     } catch {
-      return
-    }
-  }
-
-  const handleProgressLayout = (event: LayoutChangeEvent) => {
-    setProgressTrackWidth(event.nativeEvent.layout.width)
-  }
-
-  const handleSeekPress = (locationX: number) => {
-    if (!progressTrackWidth || !videoState.duration) {
+      toast.alert(
+        t('mediaViewerSaveFailedTitle'),
+        isVideo ? t('mediaViewerVideoSaveFailed') : t('mediaViewerImageSaveFailed')
+      )
       return
     }
 
-    const ratio = Math.max(0, Math.min(1, locationX / progressTrackWidth))
-    const nextTime = ratio * videoState.duration
-    sendVideoCommand(`window.__rnSeek(${nextTime})`)
+    if (isVideo) {
+      toast.info(t('mediaViewerSavedToAlbum'))
+      return
+    }
+
+    toast.info(t('mediaViewerSavedToAlbum'))
   }
 
   if (!message && !resolvedUri) {
     return (
       <ThemedView style={styles.container}>
         <Stack.Screen options={{ headerShown: false }} />
-        <UIKitChatEmptyState title="媒体不存在" description="当前图片或视频还没有同步完成。" />
+        <UIKitChatEmptyState
+          title={t('mediaViewerMissingTitle')}
+          description={t('mediaViewerMissingDescription')}
+        />
       </ThemedView>
     )
   }
@@ -268,11 +283,37 @@ const MediaViewerScreen = observer(() => {
 
   if (isImage) {
     const imageAttachment = message?.attachment as V2NIMMessageImageAttachment | undefined
-    const source = resolvedUri || getMediaSource(imageAttachment)
+    const source = resolvedUri || getImageSource(imageAttachment)
     const imageItems =
       conversationImages.length > 0
         ? conversationImages
         : [{ key: resolvedMessageId || source, uri: source }]
+
+    const handleImageLoadStart = (uri: string) => {
+      if (loadedMediaViewerImageUris.has(uri)) {
+        return
+      }
+
+      setLoadingImageUris((current) => ({
+        ...current,
+        [uri]: true
+      }))
+    }
+
+    const handleImageLoad = (uri: string) => {
+      loadedMediaViewerImageUris.add(uri)
+      setLoadingImageUris((current) => ({
+        ...current,
+        [uri]: false
+      }))
+    }
+
+    const handleImageLoadError = (uri: string) => {
+      setLoadingImageUris((current) => ({
+        ...current,
+        [uri]: false
+      }))
+    }
 
     const handleImageScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       if (!width) {
@@ -297,57 +338,72 @@ const MediaViewerScreen = observer(() => {
               keyExtractor={(item) => item.key}
               showsHorizontalScrollIndicator={false}
               onMomentumScrollEnd={handleImageScroll}
+              onScrollToIndexFailed={(info) => {
+                setTimeout(() => {
+                  imageListRef.current?.scrollToOffset({
+                    offset: info.averageItemLength * info.index,
+                    animated: false
+                  })
+                }, 50)
+              }}
               getItemLayout={(_, index) => ({
                 length: width,
                 offset: width * index,
                 index
               })}
               renderItem={({ item }) => (
-                <ScrollView
-                  style={[styles.imageWrap, { width }]}
-                  contentContainerStyle={styles.imageScrollContent}
-                  minimumZoomScale={1}
-                  maximumZoomScale={3}
-                  centerContent
-                >
-                  <Image source={item.uri} style={styles.image} contentFit="contain" />
-                </ScrollView>
+                <View style={[styles.imagePage, { width, height }]}>
+                  <View style={[styles.imageFrame, { width, height }]}>
+                    <MediaViewerImage
+                      uri={item.uri}
+                      onLoadStart={() => handleImageLoadStart(item.uri)}
+                      onLoad={() => handleImageLoad(item.uri)}
+                      onError={() => handleImageLoadError(item.uri)}
+                    />
+                    {loadingImageUris[item.uri] ? (
+                      <View style={styles.imageLoadingOverlay}>
+                        <ActivityIndicator color="#FFFFFF" />
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
               )}
             />
-            <View style={styles.imageIndexWrap}>
+            <View style={[styles.imageIndexWrap, { top: insets.top + 32 }]}>
               <ThemedText style={styles.imageIndexText}>
                 {imageIndex + 1}/{imageItems.length}
               </ThemedText>
             </View>
-            <View style={styles.bottomActionRow}>
+            <View style={[styles.bottomActionRow, { bottom: insets.bottom + 24 }]}>
               <CircleAction icon="close" onPress={() => router.back()} />
               <View style={styles.bottomActionSpacer} />
               <CircleAction
                 icon="download-outline"
                 onPress={() =>
                   saveMedia().catch((error) =>
-                    Alert.alert('保存失败', error instanceof Error ? error.message : '图片保存失败')
+                    toast.alert(
+                      t('mediaViewerSaveFailedTitle'),
+                      error instanceof Error ? error.message : t('mediaViewerImageSaveFailed')
+                    )
                   )
                 }
-              />
-              <CircleAction
-                icon="grid-outline"
-                onPress={() => openOriginal().catch(() => undefined)}
               />
             </View>
           </>
         ) : (
-          <UIKitChatEmptyState title="图片资源不存在" description="请返回聊天页后重新尝试打开。" />
+          <UIKitChatEmptyState
+            title={t('mediaViewerImageMissingTitle')}
+            description={t('mediaViewerImageMissingDescription')}
+          />
         )}
       </ThemedView>
     )
   }
 
   const videoAttachment = message?.attachment as V2NIMMessageVideoAttachment | undefined
-  const videoSource = resolvedUri || getMediaSource(videoAttachment)
-  const videoHtml = buildVideoHtml(videoSource)
-  const progressRatio =
-    videoState.duration > 0 ? Math.min(1, videoState.currentTime / videoState.duration) : 0
+  const videoSource = resolvedUri || getVideoSource(videoAttachment)
+  const videoSourceName = videoAttachment?.name || resolvedName
+  const videoSourceExt = videoAttachment?.ext || resolvedExt
 
   return (
     <ThemedView style={styles.container}>
@@ -355,55 +411,14 @@ const MediaViewerScreen = observer(() => {
       <View style={styles.videoWrap}>
         {videoSource ? (
           <>
-            <WebView
-              ref={videoWebViewRef}
-              originWhitelist={['*']}
-              source={{ html: videoHtml }}
-              style={styles.videoWebView}
-              onMessage={handleVideoMessage}
-              allowsInlineMediaPlayback
-              mediaPlaybackRequiresUserAction
-              scrollEnabled={false}
-            />
-            {videoState.paused ? (
-              <TouchableOpacity
-                style={styles.centerPlayButton}
-                onPress={() => sendVideoCommand('window.__rnPlay()')}
-              >
-                <Ionicons name="play" size={54} color="#FFFFFF" style={styles.centerPlayIcon} />
-              </TouchableOpacity>
-            ) : null}
-
-            <View style={styles.videoControlsWrap}>
-              <View style={styles.timelineRow}>
-                <TouchableOpacity
-                  style={styles.playButtonInline}
-                  onPress={() => sendVideoCommand('window.__rnTogglePlay()')}
-                >
-                  <Ionicons name={videoState.paused ? 'play' : 'pause'} size={30} color="#FFFFFF" />
-                </TouchableOpacity>
-                <ThemedText style={styles.timeText}>
-                  {formatDuration(videoState.currentTime)}
-                </ThemedText>
-                <Pressable
-                  style={styles.progressTrack}
-                  onLayout={handleProgressLayout}
-                  onPress={(event) => handleSeekPress(event.nativeEvent.locationX)}
-                >
-                  <View style={[styles.progressFill, { width: `${progressRatio * 100}%` }]} />
-                  <View style={[styles.progressThumb, { left: `${progressRatio * 100}%` }]} />
-                </Pressable>
-                <ThemedText style={styles.timeText}>
-                  {formatDuration(videoState.duration)}
-                </ThemedText>
-              </View>
+            <View style={styles.videoStage}>
+              <NativeVideoPlayer uri={videoSource} name={videoSourceName} ext={videoSourceExt} />
             </View>
 
-            <View style={styles.bottomActionRow}>
+            <View style={[styles.bottomActionRow, { bottom: insets.bottom + 24 }]}>
               <CircleAction
                 icon="close"
                 onPress={() => {
-                  sendVideoCommand('window.__rnPause()')
                   router.back()
                 }}
               />
@@ -412,23 +427,98 @@ const MediaViewerScreen = observer(() => {
                 icon="download-outline"
                 onPress={() =>
                   saveMedia().catch((error) =>
-                    Alert.alert('保存失败', error instanceof Error ? error.message : '视频保存失败')
+                    toast.alert(
+                      t('mediaViewerSaveFailedTitle'),
+                      error instanceof Error ? error.message : t('mediaViewerVideoSaveFailed')
+                    )
                   )
                 }
-              />
-              <CircleAction
-                icon="grid-outline"
-                onPress={() => openOriginal().catch(() => undefined)}
               />
             </View>
           </>
         ) : (
-          <UIKitChatEmptyState title="视频资源不存在" description="请返回聊天页后重新尝试打开。" />
+          <UIKitChatEmptyState
+            title={t('mediaViewerVideoMissingTitle')}
+            description={t('mediaViewerVideoMissingDescription')}
+          />
         )}
       </View>
     </ThemedView>
   )
 })
+
+function NativeVideoPlayer({ uri, name, ext }: { uri: string; name?: string; ext?: string }) {
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState)
+  const shouldResumeVideoRef = useRef(false)
+  const source = useMemo(() => buildNativeVideoSource(uri, name, ext), [ext, name, uri])
+  const player = useVideoPlayer(source, (videoPlayer) => {
+    videoPlayer.loop = false
+    videoPlayer.timeUpdateEventInterval = 1
+    videoPlayer.play()
+  })
+  const pausePlayerIfPlaying = React.useCallback(() => {
+    try {
+      if (player.playing) {
+        player.pause()
+      }
+    } catch (error) {
+      console.warn('[MediaViewer] pause video failed', error)
+    }
+  }, [player])
+
+  React.useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      const previousState = appStateRef.current
+      appStateRef.current = nextState
+
+      const wasInterrupted =
+        (previousState === 'active' || previousState === 'inactive') &&
+        (nextState === 'inactive' || nextState === 'background')
+
+      if (wasInterrupted) {
+        shouldResumeVideoRef.current = player.playing
+        pausePlayerIfPlaying()
+        return
+      }
+
+      if (
+        (previousState === 'inactive' || previousState === 'background') &&
+        nextState === 'active' &&
+        shouldResumeVideoRef.current
+      ) {
+        shouldResumeVideoRef.current = false
+        player.play()
+      }
+    })
+
+    return () => {
+      subscription.remove()
+    }
+  }, [pausePlayerIfPlaying, player])
+
+  React.useEffect(() => {
+    const subscriptions = AUDIO_VIDEO_CALL_INTERRUPTION_EVENTS.map((eventName) =>
+      DeviceEventEmitter.addListener(eventName, () => {
+        shouldResumeVideoRef.current = false
+        pausePlayerIfPlaying()
+      })
+    )
+
+    return () => {
+      subscriptions.forEach((subscription) => subscription.remove())
+    }
+  }, [pausePlayerIfPlaying])
+
+  return (
+    <VideoView
+      player={player}
+      style={styles.nativeVideoView}
+      contentFit="contain"
+      nativeControls
+      allowsPictureInPicture={false}
+    />
+  )
+}
 
 function CircleAction({
   icon,
@@ -438,8 +528,8 @@ function CircleAction({
   onPress: () => void
 }) {
   return (
-    <TouchableOpacity style={styles.circleAction} onPress={onPress}>
-      <Ionicons name={icon} size={36} color="#FFFFFF" />
+    <TouchableOpacity style={styles.circleAction} onPress={onPress} hitSlop={10}>
+      <Ionicons name={icon} size={18} color="#FFFFFF" />
     </TouchableOpacity>
   )
 }
@@ -451,80 +541,25 @@ const styles = StyleSheet.create({
   },
   videoWrap: {
     flex: 1,
-    backgroundColor: '#000000'
-  },
-  videoWebView: {
-    flex: 1,
-    backgroundColor: '#000000'
-  },
-  centerPlayButton: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    width: 170,
-    height: 170,
-    marginLeft: -85,
-    marginTop: -85,
-    borderRadius: 85,
-    borderWidth: 4,
-    borderColor: '#FFFFFF',
+    backgroundColor: '#000000',
     alignItems: 'center',
     justifyContent: 'center'
   },
-  centerPlayIcon: {
-    marginLeft: 8
-  },
-  videoControlsWrap: {
-    position: 'absolute',
-    left: 26,
-    right: 26,
-    bottom: 124
-  },
-  timelineRow: {
-    flexDirection: 'row',
-    alignItems: 'center'
-  },
-  playButtonInline: {
-    width: 34,
-    height: 34,
+  videoStage: {
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10
+    justifyContent: 'center'
   },
-  timeText: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    lineHeight: 28,
-    fontWeight: '700'
-  },
-  progressTrack: {
-    flex: 1,
-    height: 28,
-    justifyContent: 'center',
-    marginHorizontal: 14
-  },
-  progressFill: {
-    position: 'absolute',
-    left: 0,
-    top: 12,
-    height: 5,
-    borderRadius: 999,
-    backgroundColor: '#FFFFFF'
-  },
-  progressThumb: {
-    position: 'absolute',
-    top: 2,
-    width: 24,
-    height: 24,
-    marginLeft: -12,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF'
+  nativeVideoView: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000000'
   },
   bottomActionRow: {
     position: 'absolute',
-    left: 26,
-    right: 26,
-    bottom: 40,
+    left: 20,
+    right: 20,
+    bottom: 20,
     flexDirection: 'row',
     alignItems: 'center'
   },
@@ -532,26 +567,32 @@ const styles = StyleSheet.create({
     flex: 1
   },
   circleAction: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: 'rgba(255, 255, 255, 0.24)',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#4C4C4C',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 16
+    marginLeft: 12
   },
-  imageWrap: {
+  imagePage: {
     flex: 1,
-    padding: 12
+    alignItems: 'center',
+    justifyContent: 'center'
   },
-  imageScrollContent: {
-    flexGrow: 1,
+  imageFrame: {
     alignItems: 'center',
     justifyContent: 'center'
   },
   image: {
-    flex: 1,
-    width: '100%'
+    width: '100%',
+    height: '100%'
+  },
+  imageLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000000'
   },
   imageIndexWrap: {
     position: 'absolute',

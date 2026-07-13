@@ -8,12 +8,14 @@ chat page also relies on a bottom composer layout that can be obscured by the mo
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Reproduce the H5 emoji-composer interaction model in the RN chat detail page.
 - Reuse existing emoji token and parsing utilities where they can be made RN-safe.
 - Keep the composer, send button, and auxiliary panels visible when the keyboard opens.
 - Render supported emoji tokens consistently in text message bubbles.
 
 **Non-Goals:**
+
 - Adding sticker packs, GIFs, or custom emoji management.
 - Reworking unrelated chat attachment flows or message action sheets.
 - Changing the underlying message payload format away from existing emoji tokens.

@@ -29,6 +29,7 @@ skills/im-feature-foundation/
 ## 建议安装位置
 
 常见放置方式：
+
 - `<target-repo>/skills/im-feature-foundation/`
 - `<target-repo>/.codex/skills/im-feature-foundation/`
 
@@ -37,6 +38,7 @@ skills/im-feature-foundation/
 ## 迁移后建议检查
 
 至少检查：
+
 - `SKILL.md` 是否存在
 - `references/` 是否完整
 - `evals/evals.json` 是否存在
@@ -45,8 +47,10 @@ skills/im-feature-foundation/
 ## 推荐搭配
 
 如果目标仓库是全新项目：
+
 - 先安装 `im-feature-foundation`
 
 如果目标仓库已经有现成 IM 代码边界：
+
 - 安装 `im-feature-foundation`
 - 再增加一个项目专用 adapter skill

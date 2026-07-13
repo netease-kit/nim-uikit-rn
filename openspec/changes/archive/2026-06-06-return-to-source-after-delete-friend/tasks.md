@@ -1,0 +1,4 @@
+- [x] Inspect friend card delete success navigation behavior.
+- [x] Change delete success navigation to return to the previous route when available.
+- [x] Keep contacts page fallback when the card has no back stack.
+- [x] Validate TypeScript, target lint, and OpenSpec change.

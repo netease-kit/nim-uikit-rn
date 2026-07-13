@@ -1,0 +1,3 @@
+- [x] Inspect RN emoji panel insertion and message emoji rendering mappings.
+- [x] Fix duplicated localized emoji keys for `[睡着]`/`[睡觉]` and `[发怒]`/`[生气]`.
+- [x] Validate TypeScript, target lint, and OpenSpec change.

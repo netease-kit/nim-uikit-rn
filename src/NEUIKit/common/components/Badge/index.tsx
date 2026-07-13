@@ -36,7 +36,15 @@ export interface BadgeProps {
  * Badge 组件
  * 显示徽标数字或小红点
  */
-const Badge: React.FC<BadgeProps> = ({ num, max = 99, dot = false, style = {}, className = '', children, offset = [0, 0] }) => {
+const Badge: React.FC<BadgeProps> = ({
+  num,
+  max = 99,
+  dot = false,
+  style = {},
+  className = '',
+  children,
+  offset = [0, 0]
+}) => {
   // 计算显示的文本
   const text = useMemo(() => {
     return num > 0 ? (num > max ? `${max}` : `${num}`) : ''

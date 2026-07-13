@@ -95,7 +95,9 @@ const LastMsgContent: React.FC<LastMsgContentProps> = observer(({ lastMessage })
   }, [lastMessage.text])
 
   // 根据消息状态和类型显示不同内容
-  if (lastMessage.lastMessageState === V2NIMConst.V2NIMLastMessageState.V2NIM_MESSAGE_STATUS_REVOKE) {
+  if (
+    lastMessage.lastMessageState === V2NIMConst.V2NIMLastMessageState.V2NIM_MESSAGE_STATUS_REVOKE
+  ) {
     return <div>{t('recall')}</div>
   }
 
@@ -103,7 +105,10 @@ const LastMsgContent: React.FC<LastMsgContentProps> = observer(({ lastMessage })
     return <div>{t('conversationNotificationText')}</div>
   }
 
-  if (lastMessage.sendingState === V2NIMConst.V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_FAILED) {
+  if (
+    lastMessage.sendingState ===
+    V2NIMConst.V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_FAILED
+  ) {
     return <div>{t('conversationSendFailText')}</div>
   }
 

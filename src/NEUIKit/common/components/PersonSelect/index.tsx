@@ -76,7 +76,9 @@ const PersonSelect: React.FC<PersonSelectProps> = ({
 
   // 初始化选中状态
   useEffect(() => {
-    const initialSelectedAccounts = personList.filter((item) => item.checked).map((item) => item.accountId)
+    const initialSelectedAccounts = personList
+      .filter((item) => item.checked)
+      .map((item) => item.accountId)
     setSelectAccount(initialSelectedAccounts)
   }, [personList])
 
@@ -135,11 +137,19 @@ const PersonSelect: React.FC<PersonSelectProps> = ({
                     className="nim-radio-input"
                     value={item.accountId}
                     checked={selectAccount.includes(item.accountId)}
-                    disabled={item.disabled || (selectAccount.length >= max && !selectAccount.includes(item.accountId))}
+                    disabled={
+                      item.disabled ||
+                      (selectAccount.length >= max && !selectAccount.includes(item.accountId))
+                    }
                     onChange={(e) => handleRadioChange(e, item.accountId)}
                   />
                   <span className="nim-radio-custom"></span>
-                  <Avatar className="nim-user-avatar" size={36} account={item.accountId} teamId={item.teamId} />
+                  <Avatar
+                    className="nim-user-avatar"
+                    size={36}
+                    account={item.accountId}
+                    teamId={item.teamId}
+                  />
                   <div className="nim-user-name">
                     <Appellation account={item.accountId} teamId={item.teamId} />
                   </div>
@@ -152,17 +162,28 @@ const PersonSelect: React.FC<PersonSelectProps> = ({
           <div className="nim-checkbox-group">
             {personList.map((item) => (
               <div className="nim-member-item" key={item.accountId}>
-                <label className="nim-checkbox-label" onClick={(e) => handleCheckboxChange(e, item.accountId)}>
+                <label
+                  className="nim-checkbox-label"
+                  onClick={(e) => handleCheckboxChange(e, item.accountId)}
+                >
                   <input
                     type="checkbox"
                     className="nim-checkbox-input"
                     value={item.accountId}
                     checked={selectAccount.includes(item.accountId)}
-                    disabled={item.disabled || (selectAccount.length >= max && !selectAccount.includes(item.accountId))}
+                    disabled={
+                      item.disabled ||
+                      (selectAccount.length >= max && !selectAccount.includes(item.accountId))
+                    }
                     readOnly
                   />
                   <span className="nim-checkbox-custom"></span>
-                  <Avatar className="nim-user-avatar" size={36} account={item.accountId} teamId={item.teamId} />
+                  <Avatar
+                    className="nim-user-avatar"
+                    size={36}
+                    account={item.accountId}
+                    teamId={item.teamId}
+                  />
                   <div className="nim-user-name">
                     <Appellation account={item.accountId} teamId={item.teamId} />
                   </div>

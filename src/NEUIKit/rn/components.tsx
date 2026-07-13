@@ -15,16 +15,21 @@ import {
   View,
   ViewStyle
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
+import { EMOJI_RENDER_ICON_MAP_CONFIG } from '@/src/NEUIKit/common/utils/emoji'
+import { parseText } from '@/src/NEUIKit/common/utils/parseText'
+import { translateCurrentApp } from '@/utils/app-language'
 
 import { NEUIKitIconName, UIKitIcon } from './icon'
 import {
   getUIKitAppellation,
   getUIKitAvatarColor,
   getUIKitAvatarLabel,
-  getUIKitAvatarUri
+  getUIKitAvatarUri,
+  getUIKitUserAvatarLabel
 } from './identity'
 import { NEUIKitColors, NEUIKitMetrics } from './theme'
 
@@ -40,6 +45,8 @@ export type UIKitMenuAction = {
   danger?: boolean
   onPress: () => void
 }
+
+const DEFAULT_EMPTY_IMAGE = require('../static/empty.png')
 
 const webTextInputFocusReset =
   Platform.OS === 'web'
@@ -160,16 +167,38 @@ export function UIKitButton({
   )
 }
 
+export function UIKitHeaderBackButton({
+  onPress,
+  tintColor = '#111827'
+}: {
+  onPress: () => void
+  tintColor?: string
+}) {
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityLabel={translateCurrentApp('actionBack' as never)}
+      hitSlop={10}
+      onPress={onPress}
+      style={styles.headerBackButton}
+    >
+      <UIKitIcon type="icon-zuojiantou" size={22} tintColor={tintColor} />
+    </TouchableOpacity>
+  )
+}
+
 export function UIKitAvatar({
   uri,
   label,
   size = NEUIKitMetrics.avatar,
-  color = NEUIKitColors.primary
+  color = NEUIKitColors.primary,
+  recyclingKey
 }: {
   uri?: string
   label?: string
   size?: number
   color?: string
+  recyclingKey?: string
 }) {
   const radius = size / 2
 
@@ -177,6 +206,7 @@ export function UIKitAvatar({
     return (
       <Image
         source={uri}
+        recyclingKey={recyclingKey || uri}
         style={[styles.avatar, { width: size, height: size, borderRadius: radius }]}
       />
     )
@@ -200,20 +230,52 @@ export function UIKitUserAvatar({
   account,
   teamId,
   avatar,
-  size = NEUIKitMetrics.avatar
+  fallbackLabel,
+  size = NEUIKitMetrics.avatar,
+  onlineStatus
 }: {
   account: string
   teamId?: string
   avatar?: string
+  fallbackLabel?: string
   size?: number
+  onlineStatus?: string
 }) {
+  const statusDotSize = Math.max(10, Math.round(size * 0.24))
+  const statusDotBorder = Math.max(2, Math.round(size * 0.05))
+  const resolvedAvatarUri = getUIKitAvatarUri(account, avatar, { teamId })
+  const avatarRecyclingKey = `${account}:${teamId || ''}:${resolvedAvatarUri || 'fallback'}:${size}`
+
   return (
-    <UIKitAvatar
-      uri={getUIKitAvatarUri(account, avatar)}
-      label={getUIKitAvatarLabel({ account, teamId })}
-      size={size}
-      color={getUIKitAvatarColor(account)}
-    />
+    <View style={{ width: size, height: size }}>
+      <UIKitAvatar
+        uri={resolvedAvatarUri}
+        label={
+          teamId
+            ? getUIKitAvatarLabel({ account, teamId })
+            : getUIKitUserAvatarLabel({ account, explicitLabel: fallbackLabel })
+        }
+        size={size}
+        color={getUIKitAvatarColor(account)}
+        recyclingKey={avatarRecyclingKey}
+      />
+      {onlineStatus ? (
+        <View
+          style={[
+            styles.avatarOnlineDot,
+            {
+              width: statusDotSize,
+              height: statusDotSize,
+              borderRadius: statusDotSize / 2,
+              borderWidth: statusDotBorder
+            },
+            onlineStatus === translateCurrentApp('commonOnline')
+              ? styles.avatarOnlineDotActive
+              : styles.avatarOnlineDotInactive
+          ]}
+        />
+      ) : null}
+    </View>
   )
 }
 
@@ -239,14 +301,22 @@ export function UIKitAppellation({
   )
 }
 
-export function UIKitBadge({ value }: { value?: number }) {
+export function UIKitBadge({
+  value,
+  muted = false,
+  dot = false
+}: {
+  value?: number
+  muted?: boolean
+  dot?: boolean
+}) {
   if (!value) {
     return null
   }
 
   return (
-    <View style={styles.badge}>
-      <ThemedText style={styles.badgeText}>{value > 99 ? '99+' : value}</ThemedText>
+    <View style={[styles.badge, muted && styles.badgeMuted, dot && styles.badgeDot]}>
+      {dot ? null : <ThemedText style={styles.badgeText}>{value > 99 ? '99+' : value}</ThemedText>}
     </View>
   )
 }
@@ -301,6 +371,7 @@ export function UIKitConversationRow({
   avatar,
   avatarAccount,
   avatarTeamId,
+  onlineStatus,
   badge,
   meta,
   pinned,
@@ -313,6 +384,7 @@ export function UIKitConversationRow({
   avatar?: string
   avatarAccount?: string
   avatarTeamId?: string
+  onlineStatus?: string
   badge?: number
   meta?: string
   pinned?: boolean
@@ -320,6 +392,14 @@ export function UIKitConversationRow({
   onPress?: () => void
   onLongPress?: () => void
 }) {
+  const subtitleValue = subtitle || ''
+  const mentionPrefix = translateCurrentApp('conversationMentionPrefix' as never)
+  const subtitlePrefix = subtitleValue.startsWith(mentionPrefix) ? mentionPrefix : ''
+  const subtitleContent = subtitlePrefix
+    ? subtitleValue.slice(subtitlePrefix.length)
+    : subtitleValue
+  const subtitleParts = React.useMemo(() => parseText(subtitleContent), [subtitleContent])
+
   return (
     <Pressable
       style={({ pressed }) => [
@@ -336,34 +416,97 @@ export function UIKitConversationRow({
             account={avatarAccount}
             teamId={avatarTeamId}
             avatar={avatar}
-            size={42}
+            size={38}
+            onlineStatus={onlineStatus}
           />
         ) : (
-          <UIKitAvatar uri={avatar} label={title} size={42} />
+          <UIKitAvatar
+            uri={avatar}
+            label={title}
+            size={38}
+            recyclingKey={`${title}:${avatar || ''}`}
+          />
         )}
-        <UIKitBadge value={badge} />
+        <UIKitBadge value={badge} muted={muted} dot={!!muted} />
       </View>
 
       <View style={styles.conversationBody}>
+        {meta || muted ? (
+          <View style={styles.conversationMetaWrap}>
+            {meta ? (
+              <ThemedText numberOfLines={1} style={styles.conversationTime}>
+                {meta}
+              </ThemedText>
+            ) : null}
+            {muted ? (
+              <View style={styles.conversationMuteIconWrap}>
+                <UIKitIcon type="icon-xiaoximiandarao" size={13} />
+              </View>
+            ) : null}
+          </View>
+        ) : null}
         <View style={styles.conversationTop}>
           <View style={styles.conversationTitleWrap}>
-            {pinned ? <UIKitIcon type="icon-xiaoxizhiding" size={14} /> : null}
             <ThemedText numberOfLines={1} style={styles.conversationTitle}>
               {title}
             </ThemedText>
-            {muted ? <UIKitIcon type="icon-xiaoximiandarao" size={14} /> : null}
           </View>
-          {meta ? (
-            <ThemedText numberOfLines={1} style={styles.conversationTime}>
-              {meta}
-            </ThemedText>
-          ) : null}
         </View>
 
         {subtitle ? (
-          <ThemedText numberOfLines={1} style={styles.conversationSubtitle}>
-            {subtitle}
-          </ThemedText>
+          <View style={styles.conversationSubtitleWrap}>
+            {subtitlePrefix ? (
+              <ThemedText
+                numberOfLines={1}
+                style={[styles.conversationSubtitle, styles.conversationMentionPrefix]}
+              >
+                {translateCurrentApp('conversationMentionBadge' as never)}
+              </ThemedText>
+            ) : null}
+            {subtitleParts.length > 0 ? (
+              <View style={styles.conversationSubtitleInline}>
+                {subtitleParts.map((item) => {
+                  if (item.type === 'emoji') {
+                    const iconType = EMOJI_RENDER_ICON_MAP_CONFIG[item.value] as
+                      | NEUIKitIconName
+                      | undefined
+
+                    if (!iconType) {
+                      return (
+                        <ThemedText
+                          key={item.key}
+                          numberOfLines={1}
+                          style={styles.conversationSubtitle}
+                        >
+                          {item.value}
+                        </ThemedText>
+                      )
+                    }
+
+                    return (
+                      <View key={item.key} style={styles.conversationSubtitleEmoji}>
+                        <UIKitIcon type={iconType} size={16} />
+                      </View>
+                    )
+                  }
+
+                  return (
+                    <ThemedText
+                      key={item.key}
+                      numberOfLines={1}
+                      style={styles.conversationSubtitle}
+                    >
+                      {item.value}
+                    </ThemedText>
+                  )
+                })}
+              </View>
+            ) : (
+              <ThemedText numberOfLines={1} style={styles.conversationSubtitle}>
+                {subtitleContent}
+              </ThemedText>
+            )}
+          </View>
         ) : null}
       </View>
     </Pressable>
@@ -423,7 +566,7 @@ export function UIKitListRow({
         ) : (
           <UIKitAvatar uri={avatar} label={title} />
         )}
-        <UIKitBadge value={badge} />
+        <UIKitBadge value={badge} muted={muted} dot={!!muted} />
       </View>
       <View style={styles.rowBody}>
         <View style={styles.rowTop}>
@@ -577,8 +720,21 @@ export function UIKitSwipeActionRow({
 export function UIKitEmptyState({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <View style={styles.empty}>
-      <ThemedText style={styles.emptyTitle}>{title}</ThemedText>
-      {subtitle ? <ThemedText style={styles.emptySubtitle}>{subtitle}</ThemedText> : null}
+      <Image source={DEFAULT_EMPTY_IMAGE} style={styles.emptyImage} contentFit="contain" />
+      <View style={styles.emptyTextWrap}>
+        <ThemedText
+          lightColor={NEUIKitColors.title}
+          darkColor={NEUIKitColors.title}
+          style={styles.emptyTitle}
+        >
+          {title}
+        </ThemedText>
+        {subtitle ? (
+          <ThemedText lightColor="#6B7280" darkColor="#6B7280" style={styles.emptySubtitle}>
+            {subtitle}
+          </ThemedText>
+        ) : null}
+      </View>
     </View>
   )
 }
@@ -594,9 +750,14 @@ export function UIKitActionSheet({
   actions: { label: string; danger?: boolean; onPress: () => void }[]
   onClose: () => void
 }) {
+  const insets = useSafeAreaInsets()
+
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.sheetMask} onPress={onClose}>
+      <Pressable
+        style={[styles.sheetMask, { paddingBottom: Math.max(insets.bottom, 12) }]}
+        onPress={onClose}
+      >
         <Pressable style={styles.sheetPanel} onPress={() => undefined}>
           <View style={styles.sheetGroup}>
             {title ? (
@@ -618,7 +779,9 @@ export function UIKitActionSheet({
           </View>
 
           <TouchableOpacity style={styles.sheetCancelButton} onPress={onClose}>
-            <ThemedText style={styles.sheetCancelText}>取消</ThemedText>
+            <ThemedText style={styles.sheetCancelText}>
+              {translateCurrentApp('cancelText' as never)}
+            </ThemedText>
           </TouchableOpacity>
         </Pressable>
       </Pressable>
@@ -717,6 +880,12 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     color: NEUIKitColors.primary
   },
+  headerBackButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
   dangerButtonText: {
     color: '#FFFFFF'
   },
@@ -735,6 +904,18 @@ const styles = StyleSheet.create({
   largeAvatarText: {
     fontSize: 24
   },
+  avatarOnlineDot: {
+    position: 'absolute',
+    right: -1,
+    bottom: -1,
+    borderColor: '#FFFFFF'
+  },
+  avatarOnlineDotActive: {
+    backgroundColor: '#26B96B'
+  },
+  avatarOnlineDotInactive: {
+    backgroundColor: '#C2C8D1'
+  },
   badge: {
     position: 'absolute',
     top: -5,
@@ -746,6 +927,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 4
+  },
+  badgeMuted: {
+    backgroundColor: '#C7CDD4'
+  },
+  badgeDot: {
+    minWidth: 10,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    paddingHorizontal: 0
   },
   badgeText: {
     color: '#FFFFFF',
@@ -886,11 +1077,11 @@ const styles = StyleSheet.create({
     color: NEUIKitColors.mutedText
   },
   conversationRow: {
-    minHeight: 74,
+    minHeight: 68,
     backgroundColor: NEUIKitColors.white,
-    paddingLeft: 20,
-    paddingRight: 18,
-    paddingVertical: 12,
+    paddingLeft: 18,
+    paddingRight: 16,
+    paddingVertical: 10,
     flexDirection: 'row',
     alignItems: 'center'
   },
@@ -902,20 +1093,18 @@ const styles = StyleSheet.create({
   },
   conversationAvatarWrap: {
     position: 'relative',
-    width: 42,
-    height: 42,
-    marginRight: 14
+    width: 38,
+    height: 38,
+    marginRight: 12
   },
   conversationBody: {
     flex: 1,
-    minWidth: 0
+    minWidth: 0,
+    paddingRight: 82
   },
   conversationTop: {
-    minHeight: 24,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12
+    minHeight: 22,
+    justifyContent: 'center'
   },
   conversationTitleWrap: {
     flex: 1,
@@ -927,42 +1116,83 @@ const styles = StyleSheet.create({
   conversationTitle: {
     flex: 1,
     color: '#333333',
-    fontSize: 17,
-    lineHeight: 24,
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: '500'
   },
   conversationTime: {
-    minWidth: 72,
     color: '#C7CDD4',
     fontSize: 14,
     lineHeight: 20,
     textAlign: 'right'
   },
+  conversationMetaWrap: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    minWidth: 72,
+    alignItems: 'flex-end'
+  },
+  conversationMuteIconWrap: {
+    minHeight: 18,
+    justifyContent: 'flex-end',
+    alignItems: 'flex-end'
+  },
   conversationSubtitle: {
-    marginTop: 1,
     color: '#A6ADB6',
-    fontSize: 15,
-    lineHeight: 21
+    fontSize: 13,
+    lineHeight: 18
+  },
+  conversationSubtitleWrap: {
+    marginTop: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    overflow: 'hidden'
+  },
+  conversationSubtitleInline: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    overflow: 'hidden'
+  },
+  conversationSubtitleEmoji: {
+    marginHorizontal: 1
+  },
+  conversationMentionPrefix: {
+    color: NEUIKitColors.danger
   },
   dangerText: {
     color: NEUIKitColors.danger
   },
   empty: {
-    flex: 1,
+    width: '100%',
     alignItems: 'center',
-    justifyContent: 'center',
     paddingHorizontal: 28,
-    paddingVertical: 48
+    paddingTop: 48,
+    paddingBottom: 48
+  },
+  emptyImage: {
+    width: 125,
+    height: 100,
+    marginBottom: 10
+  },
+  emptyTextWrap: {
+    width: '100%',
+    alignItems: 'center',
+    paddingHorizontal: 12
   },
   emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: NEUIKitColors.title
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '400',
+    textAlign: 'center',
+    color: '#A6AFBB'
   },
   emptySubtitle: {
-    marginTop: 8,
+    marginTop: 4,
     fontSize: 13,
-    color: '#6B7280',
+    lineHeight: 18,
+    color: '#A6AFBB',
     textAlign: 'center'
   },
   sheetMask: {
@@ -1036,11 +1266,11 @@ const styles = StyleSheet.create({
     elevation: 6
   },
   dropdownRow: {
-    minHeight: 62,
-    paddingHorizontal: 18,
+    minHeight: 52,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12
+    gap: 10
   },
   dropdownRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -1048,8 +1278,8 @@ const styles = StyleSheet.create({
   },
   dropdownText: {
     flex: 1,
-    fontSize: 17,
-    lineHeight: 24,
+    fontSize: 16,
+    lineHeight: 22,
     color: '#222222'
   }
 })

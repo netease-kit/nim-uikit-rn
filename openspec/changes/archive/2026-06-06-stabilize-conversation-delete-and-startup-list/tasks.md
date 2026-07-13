@@ -1,0 +1,5 @@
+- [x] Inspect delete flow, local placeholder merge, and Android logs.
+- [x] Add OpenSpec requirements for delete and startup list stability.
+- [x] Track locally hidden conversations after delete or invalid-prune.
+- [x] Skip hidden and empty local placeholders during home source merge.
+- [x] Validate TypeScript, lint, and OpenSpec change.

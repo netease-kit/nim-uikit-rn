@@ -1,8 +1,10 @@
 import { friendStore, imStoreV2Bridge, nimStore, teamStore, userStore } from '@/stores'
-import { V2NIMConversationType } from '@/utils/nim-sdk'
+import { V2NIMConversationType, V2NIMUser } from '@/utils/nim-sdk'
 
 const P2P_CONVERSATION_TYPE = V2NIMConversationType?.V2NIM_CONVERSATION_TYPE_P2P ?? 1
 const TEAM_CONVERSATION_TYPE = V2NIMConversationType?.V2NIM_CONVERSATION_TYPE_TEAM ?? 2
+const pendingUserProfileAccountIds = new Set<string>()
+const attemptedUserProfileAccountIds = new Set<string>()
 
 const AVATAR_COLORS: Record<number, string> = {
   0: '#60CFA7',
@@ -21,11 +23,28 @@ type AppellationOptions = {
   nickFromMsg?: string
 }
 
+type AvatarUriOptions = {
+  teamId?: string
+}
+
+type UserAvatarLabelOptions = {
+  account: string
+  explicitLabel?: string
+}
+
 type ConversationIdentityInput = {
   conversationId: string
   type?: V2NIMConversationType
   name?: string
   avatar?: string
+}
+
+function getUIKitUserNickname(account: string) {
+  const user = userStore.users.get(account)
+  const selfProfile = userStore.selfProfile?.accountId === account ? userStore.selfProfile : null
+  const friend = friendStore.friends.get(account)
+
+  return user?.name || selfProfile?.name || friend?.userProfile?.name || ''
 }
 
 function hashString(input: string) {
@@ -53,6 +72,21 @@ export function getUIKitAppellation({
     return ''
   }
 
+  const friend = friendStore.friends.get(account)
+  const aiUser = imStoreV2Bridge.aiUsers.find((item) => item.accountId === account)
+  const teamMember = teamId
+    ? teamStore.getMembers(teamId).find((item) => item.accountId === account)
+    : null
+  const isFriend = !!friend
+
+  if (!ignoreAlias && friend?.alias) {
+    return friend.alias
+  }
+
+  if (teamMember?.teamNick) {
+    return teamMember.teamNick
+  }
+
   const imAppellation = imStoreV2Bridge.rootStore?.uiStore.getAppellation({
     account,
     teamId,
@@ -60,44 +94,56 @@ export function getUIKitAppellation({
     nickFromMsg
   })
 
-  if (imAppellation) {
+  if (imAppellation && (teamId || isFriend)) {
     return imAppellation
   }
 
-  const friend = friendStore.friends.get(account)
-  const user = userStore.users.get(account)
-  const selfProfile = userStore.selfProfile?.accountId === account ? userStore.selfProfile : null
-  const teamMember = teamId
-    ? teamStore.getMembers(teamId).find((item) => item.accountId === account)
-    : null
-
-  return (
-    (!ignoreAlias && friend?.alias) ||
-    teamMember?.teamNick ||
-    user?.name ||
-    selfProfile?.name ||
-    friend?.userProfile?.name ||
-    nickFromMsg ||
-    account
-  )
+  return getUIKitUserNickname(account) || aiUser?.name || nickFromMsg || account
 }
 
-export function getUIKitAvatarUri(account: string, explicitAvatar?: string) {
+export function getUIKitAvatarUri(
+  account: string,
+  explicitAvatar?: string,
+  options: AvatarUriOptions = {}
+) {
   if (explicitAvatar) {
     return explicitAvatar
   }
 
+  const aiUser = imStoreV2Bridge.aiUsers.find((item) => item.accountId === account)
+  const teamMember = options.teamId
+    ? teamStore.getMembers(options.teamId).find((item) => item.accountId === account)
+    : null
   const imUser = imStoreV2Bridge.rootStore?.userStore.users.get(account)
   const user = userStore.users.get(account)
   const friend = friendStore.friends.get(account)
   const selfProfile = userStore.selfProfile?.accountId === account ? userStore.selfProfile : null
 
-  return imUser?.avatar || user?.avatar || selfProfile?.avatar || friend?.userProfile?.avatar || ''
+  return (
+    aiUser?.avatar ||
+    (teamMember as { avatar?: string } | null)?.avatar ||
+    imUser?.avatar ||
+    user?.avatar ||
+    selfProfile?.avatar ||
+    friend?.userProfile?.avatar ||
+    ''
+  )
 }
 
 export function getUIKitAvatarLabel(options: AppellationOptions) {
-  const name = getUIKitAppellation(options) || options.account
-  return name.slice(0, 2)
+  return getUIKitUserAvatarLabel({ account: options.account })
+}
+
+export function getUIKitUserAvatarLabel(options: UserAvatarLabelOptions) {
+  const account = options.account
+
+  if (!account) {
+    return ''
+  }
+
+  const name = getUIKitUserNickname(account) || account
+
+  return name.slice(-2)
 }
 
 export function parseUIKitConversationIdentity(conversationId: string) {
@@ -127,20 +173,110 @@ export function getUIKitConversationIdentity(conversation: ConversationIdentityI
   const isTeam = type === TEAM_CONVERSATION_TYPE
 
   if (isP2P) {
+    const aiUser = imStoreV2Bridge.aiUsers.find((item) => item.accountId === targetId)
+
     return {
       targetId,
       type,
-      title: getUIKitAppellation({ account: targetId }) || targetId,
+      title: aiUser?.name || getUIKitAppellation({ account: targetId }) || targetId,
       avatarAccount: targetId,
-      avatarUri: getUIKitAvatarUri(targetId)
+      avatarUri: getUIKitAvatarUri(targetId, aiUser?.avatar)
     }
   }
+
+  const team = isTeam ? teamStore.getTeam(targetId) : null
 
   return {
     targetId,
     type,
-    title: conversation.name || targetId || conversation.conversationId,
+    title: team?.name || conversation.name || targetId || conversation.conversationId,
     avatarAccount: targetId || conversation.conversationId,
-    avatarUri: isTeam ? conversation.avatar || teamStore.getTeam(targetId)?.avatar || '' : ''
+    avatarUri: isTeam ? team?.avatar || conversation.avatar || '' : ''
   }
+}
+
+export async function ensureUIKitUserProfiles(accountIds: string[]) {
+  const normalizedAccountIds = Array.from(
+    new Set(accountIds.map((item) => item.trim()).filter(Boolean))
+  ).filter((accountId) => {
+    const localUser = userStore.users.get(accountId)
+    const imUser = imStoreV2Bridge.rootStore?.userStore.users.get(accountId)
+    const hasLocalUser =
+      !!localUser?.avatar ||
+      !!localUser?.name ||
+      !!imUser?.avatar ||
+      !!imUser?.name ||
+      friendStore.friends.has(accountId) ||
+      imStoreV2Bridge.aiUsers.some((item) => item.accountId === accountId)
+
+    return (
+      !hasLocalUser &&
+      !pendingUserProfileAccountIds.has(accountId) &&
+      !attemptedUserProfileAccountIds.has(accountId)
+    )
+  })
+
+  if (normalizedAccountIds.length === 0) {
+    return []
+  }
+
+  normalizedAccountIds.forEach((accountId) => {
+    pendingUserProfileAccountIds.add(accountId)
+  })
+
+  try {
+    const imUserStore = imStoreV2Bridge.rootStore?.userStore
+    const imUsers = imUserStore
+      ? await Promise.all(
+          normalizedAccountIds.map((accountId) =>
+            imUserStore.getUserActive(accountId).catch(() => null)
+          )
+        )
+      : []
+    const cloudUsers = await userStore.fetchUsers(normalizedAccountIds).catch(() => [])
+    const mergedUsers = [...imUsers, ...cloudUsers].filter(
+      (user): user is V2NIMUser => !!user?.accountId
+    )
+
+    if (mergedUsers.length > 0) {
+      userStore.applyUsers(mergedUsers)
+    }
+
+    return mergedUsers
+  } finally {
+    normalizedAccountIds.forEach((accountId) => {
+      pendingUserProfileAccountIds.delete(accountId)
+      attemptedUserProfileAccountIds.add(accountId)
+    })
+  }
+}
+
+export function isUIKitAIUser(accountId?: string | null) {
+  if (!accountId) {
+    return false
+  }
+
+  return imStoreV2Bridge.aiUsers.some((item) => item.accountId === accountId)
+}
+
+export async function resolveUIKitProfileRoute(accountId?: string | null) {
+  if (!accountId) {
+    return '/friend/friend-card' as const
+  }
+
+  if (nimStore.getLoginUser() === accountId) {
+    return '/user/my-detail' as const
+  }
+
+  await friendStore.ensureFriendRelationFresh(accountId).catch(() => undefined)
+
+  if (!isUIKitAIUser(accountId)) {
+    try {
+      await imStoreV2Bridge.ensureAIUsersLoaded()
+    } catch {
+      // Ignore AI user preload failures and fall back to friend-card routing.
+    }
+  }
+
+  return isUIKitAIUser(accountId) ? ('/friend/ai-card' as const) : ('/friend/friend-card' as const)
 }

@@ -1,0 +1,4 @@
+- [x] Inspect RN rich-text emoji/text layout.
+- [x] Split rich text into wrap units and align emoji/text with consistent 24px line boxes.
+- [x] Preserve link tap and long-press behavior.
+- [x] Validate TypeScript, target lint, and OpenSpec change.

@@ -1,0 +1,3 @@
+- [x] Remove the chat detail NetInfo-only banner gate.
+- [x] Verify the banner logic matches the conversation list for authenticated IM-connected users.
+- [x] Run OpenSpec validation and a targeted TypeScript check for the edited route.

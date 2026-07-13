@@ -1,0 +1,3 @@
+- [x] 1. Update the RN local upload size limit constant from 200 MB to 100 MB.
+- [x] 2. Update Chinese and English oversize validation copy to mention the 100 MB limit.
+- [x] 3. Validate the new change with OpenSpec and verify the affected code paths still build cleanly.

@@ -59,7 +59,10 @@ export const getLoginSmsCode = (data: { mobile: string }): Promise<LoginSmsCodeR
  * @param data 请求参数
  * @returns Promise<LoginRegisterByCodeRes>
  */
-export const loginRegisterByCode = (data: { mobile: string; smsCode: string }): Promise<LoginRegisterByCodeRes> => {
+export const loginRegisterByCode = (data: {
+  mobile: string
+  smsCode: string
+}): Promise<LoginRegisterByCodeRes> => {
   const url = baseUrl + urlMap.loginRegisterByCode
 
   return fetch(url, {

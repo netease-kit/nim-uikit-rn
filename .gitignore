@@ -21,6 +21,8 @@ DerivedData
 *.ipa
 *.xcuserstate
 ios/.xcode.env.local
+android/signing.local.properties
+android/app/agconnect-services.json
 
 # Android/IntelliJ
 #
@@ -33,6 +35,7 @@ local.properties
 .cxx/
 *.keystore
 !debug.keystore
+android/.kotlin/
 
 # node.js
 #
@@ -64,6 +67,13 @@ yarn-error.log
 .expo/
 .expo-shared/
 
+# Local signing materials
+/local-signing/
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+
 # testing
 /coverage
 # @generated expo-cli sync-2b81b286409207a5da26e14c78851eb30d8ccbdb
@@ -71,3 +81,6 @@ yarn-error.log
 
 expo-env.d.ts
 # @end expo-cli
+
+dist/
+ios/

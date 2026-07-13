@@ -1,0 +1,7 @@
+- [x] Inspect conversation search, chat header identity, and home conversation source selection.
+- [x] Add OpenSpec requirements for offline searched team conversation visibility.
+- [x] Persist local placeholder conversation before opening team chat from search.
+- [x] Merge local placeholder conversations into home display source when im-store is bound.
+- [x] Use cached team metadata as chat title fallback.
+- [x] Preserve locally failed messages when chat history reloads.
+- [x] Validate TypeScript, lint, and OpenSpec change.

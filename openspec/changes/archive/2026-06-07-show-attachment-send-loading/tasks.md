@@ -1,0 +1,6 @@
+- [x] Inspect RN file and video message sending-state rendering.
+- [x] Replace file/video sending pause icon with Android/iOS-aligned circular loading indicator.
+- [x] Inspect native Android/iOS download-state behavior for image, video, and file messages.
+- [x] Replace file/video download static pause state with determinate circular progress.
+- [x] Preserve native-aligned image download behavior without adding a bubble download ring.
+- [x] Validate TypeScript, target lint, OpenSpec change, and Metro status.

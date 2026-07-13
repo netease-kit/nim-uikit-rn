@@ -29,7 +29,9 @@ const TeamList: React.FC = observer(() => {
   // 点击群组进入聊天
   const handleTeamClick = async (team: V2NIMTeam) => {
     // 选择会话
-    await store.uiStore.selectConversation(store.nim.V2NIMConversationIdUtil.teamConversationId(team.teamId))
+    await store.uiStore.selectConversation(
+      store.nim.V2NIMConversationIdUtil.teamConversationId(team.teamId)
+    )
 
     // 跳转到聊天页面
     navigate(neUiKitRouterPath.chat)

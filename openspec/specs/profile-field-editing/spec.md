@@ -1,8 +1,11 @@
 # profile-field-editing Specification
 
 ## Purpose
+
 TBD - created by archiving change port-im-kit-react-ui-h5. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Avatar Editing Flow
 
 The app SHALL provide the personal-avatar action sheet with camera, album, and cancel actions and SHALL keep the user on the profile surface after cancellation or permission rejection.
@@ -73,4 +76,3 @@ The profile editing module SHALL surface failure states for avatar or field upda
 
 - **WHEN** the user tries to save a profile update without network
 - **THEN** the app reports failure and does not silently persist an unsent value
-

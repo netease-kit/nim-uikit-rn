@@ -41,7 +41,10 @@ const FormInput: React.FC<FormInputProps> = ({
   const [inputError, setInputError] = useState(false)
 
   // 计算输入框样式类名
-  const inputClass = classNames(className, 'form-input-item', { focus: inputFocus, error: inputError })
+  const inputClass = classNames(className, 'form-input-item', {
+    focus: inputFocus,
+    error: inputError
+  })
 
   // 处理输入变化
   const handleInput = (inputValue: string) => {

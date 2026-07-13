@@ -88,7 +88,9 @@ const FriendCard: React.FC = observer(() => {
 
   // 跳转到聊天页面
   const gotoChat = async () => {
-    const conversationId = store.nim.V2NIMConversationIdUtil.p2pConversationId(userInfo?.accountId || '')
+    const conversationId = store.nim.V2NIMConversationIdUtil.p2pConversationId(
+      userInfo?.accountId || ''
+    )
     await store.uiStore.selectConversation(conversationId)
     navigate(neUiKitRouterPath.chat)
   }
@@ -127,7 +129,13 @@ const FriendCard: React.FC = observer(() => {
 
             <div className="userInfo-item">
               <div className="item-left">{t('genderText')}</div>
-              <div className="item-right">{userInfo && userInfo.gender === 0 ? t('unknow') : userInfo && userInfo.gender === 1 ? t('man') : t('woman')}</div>
+              <div className="item-right">
+                {userInfo && userInfo.gender === 0
+                  ? t('unknow')
+                  : userInfo && userInfo.gender === 1
+                    ? t('man')
+                    : t('woman')}
+              </div>
             </div>
 
             <div className="box-shadow"></div>

@@ -1,0 +1,4 @@
+- [x] 1. Confirm testcase expectations for `0564-0568` and `0851-0855` against current chat album entry behavior.
+- [x] 2. Update chat album entry to go directly into system photo permission / picker flow and keep denied flows on chat detail.
+- [x] 3. Add limited photo-access expansion handling for post-settings-change / allow-more scenarios.
+- [x] 4. Re-verify the album-permission testcases one by one and update execution records.

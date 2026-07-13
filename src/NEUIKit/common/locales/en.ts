@@ -204,7 +204,8 @@ export default {
   getForwardMessageFailed: 'Fail to get forward message',
   getHistoryFailedText: 'Fail to get history message',
   sendFailWithInBlackText: 'The other party has blocked you, message sending failed',
-  sendFailWithDeleteText: 'The relationship between both parties has been terminated, please reapply for contact',
+  sendFailWithDeleteText:
+    'The relationship between both parties has been terminated, please reapply for contact',
   friendVerificationText: 'Friend Verification',
   teamAll: 'all',
   chooseMentionText: 'Choose Mention',
@@ -256,7 +257,8 @@ export default {
   addMemberText: 'Add Member',
   removeText: 'remove',
 
-  securityTipText: 'For test only. Beware of money transfer, lottery winnings & strange call scams.',
+  securityTipText:
+    'For test only. Beware of money transfer, lottery winnings & strange call scams.',
   sendToFriend: 'send to friend',
   sendToTeam: 'send to team',
 
@@ -287,6 +289,7 @@ export default {
   Halo: '[Halo]',
   Shame: '[Shame]',
   Sleep: '[Sleep]',
+  Sleeping: '[Sleeping]',
   Tired: '[Tired]',
   Mask: '[Mask]',
   ok: '[ok]',
@@ -297,6 +300,7 @@ export default {
   ill: '[ill]',
   Mad: '[Mad]',
   Ghost: '[Ghost]',
+  Huff: '[Huff]',
   Angry: '[Angry]',
   Unhappy: '[Unhappy]',
   Frown: '[Frown]',

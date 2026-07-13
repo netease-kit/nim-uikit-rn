@@ -13,7 +13,10 @@ const NetworkAlert: React.FC = observer(() => {
   const { store } = useStateContext()
   const loginStatus = store.connectStore.loginStatus
   const isLogined = loginStatus === V2NIMConst.V2NIMLoginStatus.V2NIM_LOGIN_STATUS_LOGINED
-  const text = loginStatus === V2NIMConst.V2NIMLoginStatus.V2NIM_LOGIN_STATUS_LOGOUT ? t('offlineText') : t('connectingText')
+  const text =
+    loginStatus === V2NIMConst.V2NIMLoginStatus.V2NIM_LOGIN_STATUS_LOGOUT
+      ? t('offlineText')
+      : t('connectingText')
   // 如果已连接或无文本，则不显示
   if (isLogined) {
     return null

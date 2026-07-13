@@ -2,6 +2,7 @@
 
 buildscript {
   repositories {
+    maven { url 'https://developer.huawei.com/repo/' }
     maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
     maven { url 'https://maven.aliyun.com/repository/google' }
     maven { url 'https://maven.aliyun.com/repository/central' }
@@ -19,6 +20,7 @@ buildscript {
 allprojects {
   repositories {
     maven { url("$rootDir/../node_modules/@react-native-async-storage/async-storage/android/local_repo") }
+    maven { url 'https://developer.huawei.com/repo/' }
     maven { url 'https://maven.aliyun.com/repository/google' }
     maven { url 'https://maven.aliyun.com/repository/central' }
     maven { url 'https://maven.aliyun.com/repository/public' }

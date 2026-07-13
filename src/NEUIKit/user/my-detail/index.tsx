@@ -103,8 +103,19 @@ const MyDetail: React.FC = observer(() => {
           <div className="item-left">{t('avatarText')}</div>
           <div className="item-right">
             <Avatar avatar={myUserInfo?.avatar} account={myUserInfo?.accountId || ''} />
-            <Icon iconClassName="arrow" type="icon-jiantou" size={15} style={{ color: '#A6ADB6' }} />
-            <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept="image/*" onChange={onChangeAvatar} />
+            <Icon
+              iconClassName="arrow"
+              type="icon-jiantou"
+              size={15}
+              style={{ color: '#A6ADB6' }}
+            />
+            <input
+              type="file"
+              ref={fileInputRef}
+              style={{ display: 'none' }}
+              accept="image/*"
+              onChange={onChangeAvatar}
+            />
           </div>
         </div>
 
@@ -115,7 +126,12 @@ const MyDetail: React.FC = observer(() => {
           <div className="item-left">{t('name')}</div>
           <div className="item-right">
             <div className="nick">{myUserInfo?.name || myUserInfo?.accountId}</div>
-            <Icon iconClassName="arrow" type="icon-jiantou" size={15} style={{ color: '#A6ADB6' }} />
+            <Icon
+              iconClassName="arrow"
+              type="icon-jiantou"
+              size={15}
+              style={{ color: '#A6ADB6' }}
+            />
           </div>
         </div>
 
@@ -159,7 +175,12 @@ const MyDetail: React.FC = observer(() => {
           <div className="item-left">{t('mobile')}</div>
           <div className="item-right">
             {myUserInfo?.mobile || t('unknow')}
-            <Icon iconClassName="arrow" type="icon-jiantou" size={15} style={{ color: '#A6ADB6' }} />
+            <Icon
+              iconClassName="arrow"
+              type="icon-jiantou"
+              size={15}
+              style={{ color: '#A6ADB6' }}
+            />
           </div>
         </div>
 
@@ -170,7 +191,12 @@ const MyDetail: React.FC = observer(() => {
           <div className="item-left">{t('email')}</div>
           <div className="item-right">
             <div className="email">{myUserInfo?.email || t('unknow')}</div>
-            <Icon iconClassName="arrow" type="icon-jiantou" size={15} style={{ color: '#A6ADB6' }} />
+            <Icon
+              iconClassName="arrow"
+              type="icon-jiantou"
+              size={15}
+              style={{ color: '#A6ADB6' }}
+            />
           </div>
         </div>
       </div>

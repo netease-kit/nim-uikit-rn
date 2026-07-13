@@ -78,7 +78,11 @@ const Avatar: React.FC<AvatarProps> = ({
   const [isLongPress, setIsLongPress] = useState<boolean>(false)
 
   const avatarSize = typeof size === 'number' ? size : parseInt(size) || 42
-  const fontSizeValue = fontSize ? (typeof fontSize === 'number' ? fontSize : parseInt(fontSize)) : Math.floor(avatarSize / 3)
+  const fontSizeValue = fontSize
+    ? typeof fontSize === 'number'
+      ? fontSize
+      : parseInt(fontSize)
+    : Math.floor(avatarSize / 3)
 
   const touchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const touchStartTimeRef = useRef<number>(0)

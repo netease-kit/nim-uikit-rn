@@ -1,0 +1,6 @@
+# Copy this file to `android/signing.local.properties` for local release signing.
+
+android.releaseStoreFile=../local-signing/release.keystore
+android.releaseStorePassword=your-store-password
+android.releaseKeyAlias=your-key-alias
+android.releaseKeyPassword=your-key-password

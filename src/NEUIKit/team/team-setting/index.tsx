@@ -49,7 +49,9 @@ const TeamSetting: React.FC = observer(() => {
   const isTeamManager = useMemo(() => {
     const myUser = store.userStore.myUserInfo
     return teamMembers
-      .filter((item) => item.memberRole === V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_MANAGER)
+      .filter(
+        (item) => item.memberRole === V2NIMConst.V2NIMTeamMemberRole.V2NIM_TEAM_MEMBER_ROLE_MANAGER
+      )
       .some((member) => member.accountId === (myUser ? myUser.accountId : ''))
   }, [teamMembers, store.userStore.myUserInfo])
 
@@ -159,11 +161,15 @@ const TeamSetting: React.FC = observer(() => {
         .setTeamMessageMuteModeActive(
           teamId,
           V2NIMConst.V2NIMTeamType.V2NIM_TEAM_TYPE_ADVANCED,
-          value ? V2NIMConst.V2NIMTeamMessageMuteMode.V2NIM_TEAM_MESSAGE_MUTE_MODE_OFF : V2NIMConst.V2NIMTeamMessageMuteMode.V2NIM_TEAM_MESSAGE_MUTE_MODE_ON
+          value
+            ? V2NIMConst.V2NIMTeamMessageMuteMode.V2NIM_TEAM_MESSAGE_MUTE_MODE_OFF
+            : V2NIMConst.V2NIMTeamMessageMuteMode.V2NIM_TEAM_MESSAGE_MUTE_MODE_ON
         )
         .then(() => {
           setTeamMuteMode(
-            value ? V2NIMConst.V2NIMTeamMessageMuteMode.V2NIM_TEAM_MESSAGE_MUTE_MODE_OFF : V2NIMConst.V2NIMTeamMessageMuteMode.V2NIM_TEAM_MESSAGE_MUTE_MODE_ON
+            value
+              ? V2NIMConst.V2NIMTeamMessageMuteMode.V2NIM_TEAM_MESSAGE_MUTE_MODE_OFF
+              : V2NIMConst.V2NIMTeamMessageMuteMode.V2NIM_TEAM_MESSAGE_MUTE_MODE_ON
           )
         })
         .catch((error: any) => {
@@ -209,9 +215,11 @@ const TeamSetting: React.FC = observer(() => {
   // 初始化数据和自动更新
   useEffect(() => {
     // 查询当前群是否开启免打扰
-    store.teamStore.getTeamMessageMuteModeActive(teamId, 1).then((res: V2NIMConst.V2NIMTeamMessageMuteMode) => {
-      setTeamMuteMode(res)
-    })
+    store.teamStore
+      .getTeamMessageMuteModeActive(teamId, 1)
+      .then((res: V2NIMConst.V2NIMTeamMessageMuteMode) => {
+        setTeamMuteMode(res)
+      })
   }, [])
 
   return (
@@ -260,7 +268,13 @@ const TeamSetting: React.FC = observer(() => {
             </div>
             <div className="team-set-item team-set-item-flex">
               <div>{t('sessionMuteText')}</div>
-              <Switch checked={teamMuteMode !== V2NIMConst.V2NIMTeamMessageMuteMode.V2NIM_TEAM_MESSAGE_MUTE_MODE_ON} onChange={changeTeamMute} />
+              <Switch
+                checked={
+                  teamMuteMode !==
+                  V2NIMConst.V2NIMTeamMessageMuteMode.V2NIM_TEAM_MESSAGE_MUTE_MODE_ON
+                }
+                onChange={changeTeamMute}
+              />
             </div>
             <div className="team-set-item team-set-item-flex" onClick={goNickInTeam}>
               <div>{t('nickInTeam')}</div>
@@ -271,7 +285,13 @@ const TeamSetting: React.FC = observer(() => {
             <div className="team-set-card">
               <div className="team-set-item team-set-item-flex">
                 <div>{t('teamBannedText')}</div>
-                <Switch checked={team.chatBannedMode !== V2NIMConst.V2NIMTeamChatBannedMode.V2NIM_TEAM_CHAT_BANNED_MODE_UNBAN} onChange={setTeamChatBanned} />
+                <Switch
+                  checked={
+                    team.chatBannedMode !==
+                    V2NIMConst.V2NIMTeamChatBannedMode.V2NIM_TEAM_CHAT_BANNED_MODE_UNBAN
+                  }
+                  onChange={setTeamChatBanned}
+                />
               </div>
             </div>
           )}

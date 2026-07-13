@@ -1,10 +1,12 @@
-import { Stack, useLocalSearchParams } from 'expo-router'
+import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React, { useMemo, useState } from 'react'
-import { Alert, Modal, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native'
+import { Modal, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import {
   UIKitActionPill,
   UIKitChatComposerShell,
@@ -12,14 +14,25 @@ import {
   UIKitChatHeaderTitle
 } from '@/src/NEUIKit/rn'
 import { conversationStore, messageStore } from '@/stores'
-import { openLocalFile, persistFileToLocal, resolveFileName } from '@/utils/fileTransfer'
+import {
+  ensureLocalFileUri,
+  getPreviewableFileKind,
+  openLocalFile,
+  persistFileToLocal,
+  resolveFileName
+} from '@/utils/fileTransfer'
+import {
+  getFileTransferSource,
+  isLocalAttachmentSource,
+  normalizeMediaRenderSource
+} from '@/utils/media-source'
 import { V2NIMMessageFileAttachment } from '@/utils/nim-sdk'
 
 type SourceMode = 'chat' | 'collection'
 
 function formatFileSize(size?: number) {
   if (!size) {
-    return '未知大小'
+    return 'Unknown size'
   }
 
   if (size >= 1024 * 1024) {
@@ -68,38 +81,50 @@ function getFileTone(extension: string) {
 }
 
 const SOURCE_OPTIONS: { key: SourceMode; label: string }[] = [
-  { key: 'chat', label: '聊天中的文件' },
-  { key: 'collection', label: '收藏中的文件' }
+  { key: 'chat', label: '' },
+  { key: 'collection', label: '' }
 ]
 
 const FileDetailScreen = observer(() => {
-  const { conversationId, messageId, uri, name, size } = useLocalSearchParams<{
+  const { t } = useAppTranslation()
+  const { conversationId, messageId, uri, name, ext, size } = useLocalSearchParams<{
     conversationId?: string
     messageId?: string
     uri?: string
     name?: string
+    ext?: string
     size?: string
   }>()
   const resolvedConversationId = typeof conversationId === 'string' ? conversationId : ''
   const resolvedMessageId = typeof messageId === 'string' ? messageId : ''
+  const routeUri = typeof uri === 'string' ? uri : ''
   const message = messageStore.getMessageById(resolvedConversationId, resolvedMessageId)
   const attachment = message?.attachment as V2NIMMessageFileAttachment | undefined
-  const sourceUri =
-    attachment?.path || attachment?.url || '' || (typeof uri === 'string' ? uri : '')
+  const normalizedRouteUri = normalizeMediaRenderSource(routeUri)
+  const remoteSourceUri = getFileTransferSource(attachment)
+  const initialLocalUri =
+    normalizedRouteUri && isLocalAttachmentSource(normalizedRouteUri)
+      ? normalizedRouteUri
+      : isLocalAttachmentSource(remoteSourceUri)
+        ? remoteSourceUri
+        : null
+  const sourceUri = initialLocalUri || remoteSourceUri || normalizedRouteUri
   const fileName = resolveFileName(
     sourceUri,
-    attachment?.name || (typeof name === 'string' ? name : undefined)
+    attachment?.name || (typeof name === 'string' ? name : undefined),
+    attachment?.ext || (typeof ext === 'string' ? ext : undefined)
   )
   const fileSize = attachment?.size || (typeof size === 'string' && size ? Number(size) : undefined)
-  const initialLocalUri =
-    sourceUri.startsWith('file://') || sourceUri.startsWith('content://') ? sourceUri : null
+  const previewableFileKind = getPreviewableFileKind(fileName, attachment?.ext)
   const [localUri, setLocalUri] = useState<string | null>(initialLocalUri)
   const [downloading, setDownloading] = useState(false)
   const [opening, setOpening] = useState(false)
   const [sourceMode, setSourceMode] = useState<SourceMode>('chat')
   const [selectorVisible, setSelectorVisible] = useState(false)
   const conversation = conversationStore.getConversation(resolvedConversationId)
-  const placeholder = conversation?.name ? `发送给 ${conversation.name}` : '发送给 当前会话'
+  const placeholder = conversation?.name
+    ? t('chatSendToConversation', { name: conversation.name })
+    : t('fileDetailSendToCurrentConversation')
   const extension = useMemo(() => getFileExtension(fileName), [fileName])
   const tone = useMemo(() => getFileTone(extension), [extension])
 
@@ -110,11 +135,17 @@ const FileDetailScreen = observer(() => {
 
     try {
       setDownloading(true)
-      const savedUri = await persistFileToLocal(sourceUri, fileName)
+      const savedUri = localUri || (await persistFileToLocal(sourceUri, fileName))
       setLocalUri(savedUri)
-      Alert.alert('下载成功', '文件已保存到本地')
+      toast.alert(
+        localUri ? t('fileDetailSavedTitle') : t('fileDetailDownloadSuccessTitle'),
+        t('fileDetailSavedDescription')
+      )
     } catch (error) {
-      Alert.alert('下载失败', error instanceof Error ? error.message : '文件保存失败')
+      toast.alert(
+        t('commonLoadingFailed'),
+        error instanceof Error ? error.message : t('fileDetailDownloadFailed')
+      )
     } finally {
       setDownloading(false)
     }
@@ -127,11 +158,28 @@ const FileDetailScreen = observer(() => {
 
     try {
       setOpening(true)
-      const savedUri = localUri || (await persistFileToLocal(sourceUri, fileName))
+      const savedUri = await ensureLocalFileUri(localUri || sourceUri, fileName)
       setLocalUri(savedUri)
+
+      if (previewableFileKind) {
+        router.push({
+          pathname: '/chat/media-viewer',
+          params: {
+            conversationId: resolvedConversationId,
+            messageId: resolvedMessageId,
+            uri: savedUri,
+            type: previewableFileKind
+          }
+        } as never)
+        return
+      }
+
       await openLocalFile(savedUri)
     } catch (error) {
-      Alert.alert('打开失败', error instanceof Error ? error.message : '当前文件无法打开')
+      toast.alert(
+        t('mediaViewerOpenFailedTitle'),
+        error instanceof Error ? error.message : t('chatFileOpenFailed')
+      )
     } finally {
       setOpening(false)
     }
@@ -147,7 +195,11 @@ const FileDetailScreen = observer(() => {
               onPress={() => setSelectorVisible(true)}
             >
               <UIKitChatHeaderTitle
-                title={sourceMode === 'chat' ? '聊天中的文件' : '收藏中的文件'}
+                title={
+                  sourceMode === 'chat'
+                    ? t('fileDetailSourceChat')
+                    : t('fileDetailSourceCollection')
+                }
               />
               <ThemedText style={styles.headerChevron}>⌄</ThemedText>
             </TouchableOpacity>
@@ -159,15 +211,16 @@ const FileDetailScreen = observer(() => {
       />
 
       {!sourceUri ? (
-        <UIKitChatEmptyState title="文件不存在" description="当前文件还没有同步完成，稍后再试。" />
+        <UIKitChatEmptyState
+          title={t('fileDetailUnavailableTitle')}
+          description={t('fileDetailUnavailableDescription')}
+        />
       ) : (
         <>
           <View style={styles.content}>
             <View style={styles.filterHint}>
               <ThemedText style={styles.filterHintText}>
-                {sourceMode === 'chat'
-                  ? '当前展示这条聊天消息里的文件。'
-                  : '当前展示已打开文件的收藏态壳层，后续可接入真实收藏列表。'}
+                {sourceMode === 'chat' ? t('fileDetailChatHint') : t('fileDetailCollectionHint')}
               </ThemedText>
             </View>
 
@@ -184,34 +237,49 @@ const FileDetailScreen = observer(() => {
                 <ThemedText style={styles.fileSubText}>{formatFileSize(fileSize)}</ThemedText>
                 <ThemedText style={styles.fileSubText}>
                   {opening
-                    ? '文件打开中'
+                    ? t('fileDetailOpeningStatus')
                     : downloading
-                      ? '文件下载中'
+                      ? t('fileDetailDownloadingStatus')
                       : localUri
-                        ? '已下载，可直接打开'
-                        : '未下载，打开时会自动缓存'}
+                        ? t('fileDetailDownloadedStatus')
+                        : t('fileDetailPendingStatus')}
                 </ThemedText>
               </View>
             </View>
 
             <View style={styles.actionRow}>
               <UIKitActionPill
-                label={opening ? '打开中...' : localUri ? '打开文件' : '下载并打开'}
+                label={
+                  opening
+                    ? t('fileDetailOpening')
+                    : localUri
+                      ? t('fileDetailOpenFile')
+                      : t('fileDetailDownloadAndOpen')
+                }
                 tone="primary"
                 onPress={() => {
                   handleOpen().catch((error) => {
-                    Alert.alert(
-                      '打开失败',
-                      error instanceof Error ? error.message : '当前文件无法打开'
+                    toast.alert(
+                      t('mediaViewerOpenFailedTitle'),
+                      error instanceof Error ? error.message : t('chatFileOpenFailed')
                     )
                   })
                 }}
               />
               <UIKitActionPill
-                label={downloading ? '保存中...' : '保存文件'}
+                label={
+                  downloading
+                    ? t('fileDetailSaving')
+                    : localUri
+                      ? t('fileDetailSaved')
+                      : t('fileDetailSaveFile')
+                }
                 onPress={() => {
                   handleDownload().catch((error) => {
-                    Alert.alert('下载失败', error instanceof Error ? error.message : '文件保存失败')
+                    toast.alert(
+                      t('commonLoadingFailed'),
+                      error instanceof Error ? error.message : t('fileDetailDownloadFailed')
+                    )
                   })
                 }}
               />
@@ -232,6 +300,8 @@ const FileDetailScreen = observer(() => {
           <Pressable style={styles.modalCard} onPress={() => undefined}>
             {SOURCE_OPTIONS.map((option) => {
               const active = option.key === sourceMode
+              const label =
+                option.key === 'chat' ? t('fileDetailSourceChat') : t('fileDetailSourceCollection')
 
               return (
                 <TouchableOpacity
@@ -242,7 +312,7 @@ const FileDetailScreen = observer(() => {
                     setSelectorVisible(false)
                   }}
                 >
-                  <ThemedText style={styles.modalOptionText}>{option.label}</ThemedText>
+                  <ThemedText style={styles.modalOptionText}>{label}</ThemedText>
                   {active ? <ThemedText style={styles.modalOptionCheck}>✓</ThemedText> : null}
                 </TouchableOpacity>
               )

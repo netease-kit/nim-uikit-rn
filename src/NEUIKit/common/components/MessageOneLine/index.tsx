@@ -41,7 +41,10 @@ const parseText = (text: string | undefined): TextItem[] => {
 
     // 替换已匹配的表情为空格，保持索引不变
     const fillText = ' '.repeat(match[0].length)
-    tempText = tempText.substring(0, match.index) + fillText + tempText.substring(match.index + match[0].length)
+    tempText =
+      tempText.substring(0, match.index) +
+      fillText +
+      tempText.substring(match.index + match[0].length)
   }
 
   // 用正则替换掉所有表情后处理剩余文本

@@ -1,8 +1,11 @@
 # notification-preferences Specification
 
 ## Purpose
+
 TBD - created by archiving change port-im-kit-react-ui-h5. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Settings Landing Page Layout
 
 The settings module SHALL provide the first-level settings page with the message-notification entry, earpiece-mode toggle, read-receipt toggle, appearance entry, and logout action required by the tests.
@@ -23,12 +26,12 @@ The settings module SHALL provide the message-notification settings page with th
 
 ### Requirement: Notification Preference Toggles
 
-The settings module SHALL provide toggles for message notifications, sound, vibration, and detail visibility on the message-notification page.
+The settings module SHALL provide toggles for message notifications, sound, vibration, and detail visibility on the message-notification page, and SHALL apply those values to the current RN notification presentation configuration where the runtime supports it.
 
 #### Scenario: Changing notification preferences
 
 - **WHEN** the user changes one or more notification preferences
-- **THEN** the selected preference values persist locally and update the visible settings state
+- **THEN** the selected preference values persist locally, update the visible settings state, and refresh the app's active notification presentation behavior
 
 ### Requirement: Combination Preference States
 
@@ -37,7 +40,7 @@ The settings module SHALL preserve the combination states covered by the tests, 
 #### Scenario: Saving preference combinations
 
 - **WHEN** the user selects a supported combination of sound and vibration toggles
-- **THEN** the exact combination remains stored and visible after returning to settings
+- **THEN** the exact combination remains stored and visible after returning to settings, and Android channel settings are refreshed to match when available
 
 ### Requirement: Preference Dependency Rules
 
@@ -46,7 +49,7 @@ The settings module SHALL enforce the workbook's dependency rules between the ma
 #### Scenario: Disabling and re-enabling new message notifications
 
 - **WHEN** the user turns the master new-message notification toggle off and later on again
-- **THEN** subordinate controls follow the expected enabled-state and retained-value rules
+- **THEN** subordinate controls become non-editable while disabled, retain their last saved values, and resume those values when the master toggle is re-enabled
 
 ### Requirement: Read Receipt Preference
 
@@ -56,4 +59,3 @@ The settings module SHALL expose the read-receipt preference toggle on the first
 
 - **WHEN** the user turns the read-receipt preference on or off
 - **THEN** the stored preference updates and later message behavior follows that setting
-

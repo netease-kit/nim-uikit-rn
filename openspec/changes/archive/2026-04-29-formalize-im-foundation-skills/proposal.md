@@ -12,10 +12,12 @@ The repository now contains substantial IM skill knowledge, but it is only embod
 ## Capabilities
 
 ### New Capabilities
+
 - `im-feature-foundation-skill`: Defines the cross-project IM mother skill, including architecture blueprint, delivery workflow, data models, cross-platform adaptation, code skeleton templates, advanced feature packs, and baseline testing matrices.
 - `im2-feature-implementation-skill`: Defines the repository-specific implementation skill that maps IM features onto the current `im2-rn-demo` codebase and its existing route/store/service boundaries.
 
 ### Modified Capabilities
+
 - none
 
 ## Impact

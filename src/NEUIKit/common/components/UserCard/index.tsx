@@ -69,7 +69,12 @@ const UserCard: React.FC<UserCardProps> = observer(({ account = '', nick = '', o
         <div className="user-card-deputy">
           {t('accountText')}:{account}
           <div onClick={handleCopyAccount}>
-            <Icon iconClassName="user-card-copy" type="icon-fuzhi1" size={20} style={{ color: '#A6ADB6' }} />
+            <Icon
+              iconClassName="user-card-copy"
+              type="icon-fuzhi1"
+              size={20}
+              style={{ color: '#A6ADB6' }}
+            />
           </div>
         </div>
       </div>

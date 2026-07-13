@@ -3,9 +3,10 @@ import { observer } from 'mobx-react-lite'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Linking,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   StyleSheet,
   TouchableOpacity,
   View
@@ -13,23 +14,27 @@ import {
 
 import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import {
-  getUIKitAppellation,
-  UIKitActionPill,
   UIKitChatEmptyState,
   UIKitChatHeaderTitle,
-  UIKitChatHighlightText,
-  UIKitChatSearchBar,
-  UIKitMessageCard
+  UIKitChatMessageBubble,
+  UIKitChatSearchBar
 } from '@/src/NEUIKit/rn'
 import { conversationStore, messageStore, nimStore, teamStore } from '@/stores'
-import { getForwardPreview, getMessageKey, parseMergedForwardPayload } from '@/utils/messageForward'
+import { translateCurrentApp } from '@/utils/app-language'
+import { normalizeDisplayErrorMessage } from '@/utils/error-message'
+import { formatAndroidAlignedListTime } from '@/utils/list-time'
 import {
-  V2NIMConversationType,
-  V2NIMMessage,
-  V2NIMMessageSendingState,
-  V2NIMMessageType
-} from '@/utils/nim-sdk'
+  getForwardPreview,
+  getMergedForwardSummary,
+  getMessageKey,
+  isMergedForwardMessage
+} from '@/utils/messageForward'
+import { V2NIMConversationType, V2NIMMessage, V2NIMMessageType } from '@/utils/nim-sdk'
+
+const CHAT_HISTORY_PREFETCH_TOP_OFFSET = 240
 
 function getHistoryPreview(message: V2NIMMessage) {
   const revokedText = messageStore.getRevokedText(message)
@@ -39,26 +44,22 @@ function getHistoryPreview(message: V2NIMMessage) {
   }
 
   if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_NOTIFICATION) {
-    return '[通知消息]'
+    return translateCurrentApp('conversationNotificationText' as never)
   }
 
   if (message.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_TIPS) {
-    return message.text || '[提示消息]'
+    return (
+      normalizeDisplayErrorMessage(message.text || '') ||
+      translateCurrentApp('commonTipMessagePreview' as never)
+    )
   }
 
-  const mergedPayload = parseMergedForwardPayload(message)
-  return mergedPayload ? mergedPayload.title : getForwardPreview(message)
-}
-
-function getSenderName(message: V2NIMMessage, teamId?: string) {
-  if (message.isSelf) {
-    return '我'
-  }
-
-  return getUIKitAppellation({ account: message.senderId, teamId }) || message.senderId
+  const mergedSummary = getMergedForwardSummary(message)
+  return mergedSummary ? mergedSummary.title : getForwardPreview(message)
 }
 
 const ChatHistoryScreen = observer(() => {
+  const { t } = useAppTranslation()
   const { conversationId, title } = useLocalSearchParams<{
     conversationId?: string
     title?: string
@@ -74,6 +75,7 @@ const ChatHistoryScreen = observer(() => {
   const currentUserId = nimStore.getLoginUser()
   const [initialLoadFailed, setInitialLoadFailed] = useState(false)
   const [query, setQuery] = useState('')
+  const historyPrefetchTriggeredRef = React.useRef(false)
 
   const loadInitialHistory = useCallback(async () => {
     if (!currentUserId || !resolvedConversationId || messageState.isSync || messageState.loading) {
@@ -86,9 +88,12 @@ const ChatHistoryScreen = observer(() => {
       await messageStore.loadHistory(resolvedConversationId)
     } catch (error) {
       setInitialLoadFailed(true)
-      Alert.alert('加载失败', error instanceof Error ? error.message : '历史消息加载失败')
+      toast.alert(
+        t('commonLoadingFailed' as never),
+        error instanceof Error ? error.message : t('chatHistoryLoadFailed' as never)
+      )
     }
-  }, [currentUserId, messageState.isSync, messageState.loading, resolvedConversationId])
+  }, [currentUserId, messageState.isSync, messageState.loading, resolvedConversationId, t])
 
   useEffect(() => {
     loadInitialHistory().catch(() => undefined)
@@ -100,6 +105,12 @@ const ChatHistoryScreen = observer(() => {
     }
   }, [conversationType, targetId])
 
+  useEffect(() => {
+    if (!messageState.loadingMore) {
+      historyPrefetchTriggeredRef.current = false
+    }
+  }, [messageState.loadingMore])
+
   const filteredMessages = useMemo(() => {
     if (!query.trim()) {
       return messageState.list
@@ -108,22 +119,15 @@ const ChatHistoryScreen = observer(() => {
     const keyword = query.trim().toLowerCase()
 
     return messageState.list.filter((message) => {
-      const sender = getSenderName(
-        message,
-        conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
-          ? targetId
-          : undefined
-      ).toLowerCase()
+      const sender = message.senderId.toLowerCase()
       const preview = getHistoryPreview(message).toLowerCase()
 
       return sender.includes(keyword) || preview.includes(keyword)
     })
-  }, [conversationType, messageState.list, query, targetId])
+  }, [messageState.list, query])
 
   const openHistoryMessage = async (message: V2NIMMessage) => {
-    const mergedPayload = parseMergedForwardPayload(message)
-
-    if (mergedPayload) {
+    if (isMergedForwardMessage(message)) {
       router.push({
         pathname: '/chat/merged-forward-detail',
         params: {
@@ -193,14 +197,14 @@ const ChatHistoryScreen = observer(() => {
         ''
 
       if (!source) {
-        Alert.alert('打开失败', '当前语音不存在或尚未可用')
+        toast.alert(t('commonOpenFailed' as never), t('chatHistoryAudioUnavailable' as never))
         return
       }
 
       const canOpen = await Linking.canOpenURL(source)
 
       if (!canOpen) {
-        Alert.alert('打开失败', '当前设备无法直接打开该附件')
+        toast.alert(t('commonOpenFailed' as never), t('chatHistoryAttachmentUnavailable' as never))
         return
       }
 
@@ -217,11 +221,54 @@ const ChatHistoryScreen = observer(() => {
     } as never)
   }
 
+  const triggerLoadMoreHistory = useCallback(() => {
+    messageStore.loadMoreHistory(resolvedConversationId).catch((error) => {
+      toast.alert(
+        t('commonLoadingFailed' as never),
+        error instanceof Error ? error.message : t('chatHistoryLoadMoreFailed' as never)
+      )
+    })
+  }, [resolvedConversationId, t])
+
+  const handleHistoryScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (query.trim()) {
+        return
+      }
+
+      const isNearTop = event.nativeEvent.contentOffset.y <= CHAT_HISTORY_PREFETCH_TOP_OFFSET
+
+      if (!isNearTop) {
+        historyPrefetchTriggeredRef.current = false
+        return
+      }
+
+      if (
+        historyPrefetchTriggeredRef.current ||
+        messageState.loading ||
+        messageState.loadingMore ||
+        !messageState.hasMore
+      ) {
+        return
+      }
+
+      historyPrefetchTriggeredRef.current = true
+      triggerLoadMoreHistory()
+    },
+    [
+      messageState.hasMore,
+      messageState.loading,
+      messageState.loadingMore,
+      query,
+      triggerLoadMoreHistory
+    ]
+  )
+
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen
         options={{
-          headerTitle: () => <UIKitChatHeaderTitle title="历史记录" />,
+          headerTitle: () => <UIKitChatHeaderTitle title={t('chatHistoryTitle' as never)} />,
           headerTitleAlign: 'center',
           headerShadowVisible: false,
           headerStyle: { backgroundColor: '#FFFFFF' }
@@ -232,14 +279,16 @@ const ChatHistoryScreen = observer(() => {
         <UIKitChatSearchBar
           value={query}
           onChangeText={setQuery}
-          placeholder="搜索聊天记录"
+          placeholder={t('chatHistorySearchPlaceholder' as never)}
           returnKeyType="search"
         />
         <View style={styles.summaryRow}>
           <ThemedText numberOfLines={1} style={styles.summaryTitle}>
-            {resolvedTitle || conversation?.name || '当前会话'}
+            {resolvedTitle || conversation?.name || t('chatHistoryCurrentConversation' as never)}
           </ThemedText>
-          <ThemedText style={styles.summaryMeta}>共 {messageState.list.length} 条消息</ThemedText>
+          <ThemedText style={styles.summaryMeta}>
+            {t('chatHistorySummary' as never, { count: messageState.list.length })}
+          </ThemedText>
         </View>
       </View>
 
@@ -252,19 +301,16 @@ const ChatHistoryScreen = observer(() => {
             <TouchableOpacity
               style={styles.loadMoreButton}
               onPress={() => {
-                messageStore.loadMoreHistory(resolvedConversationId).catch((error) => {
-                  Alert.alert(
-                    '加载失败',
-                    error instanceof Error ? error.message : '无法加载更早消息'
-                  )
-                })
+                triggerLoadMoreHistory()
               }}
               disabled={messageState.loadingMore}
             >
               {messageState.loadingMore ? (
                 <ActivityIndicator color="#337EFF" />
               ) : (
-                <ThemedText style={styles.loadMoreText}>加载更早消息</ThemedText>
+                <ThemedText style={styles.loadMoreText}>
+                  {t('chatHistoryLoadMore' as never)}
+                </ThemedText>
               )}
             </TouchableOpacity>
           ) : null
@@ -276,8 +322,8 @@ const ChatHistoryScreen = observer(() => {
             ) : initialLoadFailed ? (
               <>
                 <UIKitChatEmptyState
-                  title="历史消息加载失败"
-                  actionLabel="重试"
+                  title={t('chatHistoryLoadFailed' as never)}
+                  actionLabel={t('commonRetry' as never)}
                   onActionPress={() => {
                     loadInitialHistory().catch(() => undefined)
                   }}
@@ -285,45 +331,64 @@ const ChatHistoryScreen = observer(() => {
               </>
             ) : (
               <UIKitChatEmptyState
-                title={query.trim() ? '没有匹配的历史消息' : '暂无历史消息'}
-                description={query.trim() ? '换一个关键词试试，或者先加载更早的消息。' : undefined}
+                title={
+                  query.trim() ? t('chatHistoryNoMatch' as never) : t('chatHistoryEmpty' as never)
+                }
+                description={query.trim() ? t('chatHistoryNoMatchDescription' as never) : undefined}
               />
             )}
           </View>
         }
+        onScroll={handleHistoryScroll}
+        scrollEventThrottle={16}
         renderItem={({ item }) => (
           <View style={styles.rowWrap}>
-            <UIKitMessageCard
-              title={getSenderName(
-                item,
-                conversationType === V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM
-                  ? targetId
-                  : undefined
-              )}
-              subtitle={new Date(item.createTime).toLocaleString()}
-              preview={getHistoryPreview(item)}
-              highlightedPreview={
-                <UIKitChatHighlightText text={getHistoryPreview(item)} keyword={query.trim()} />
-              }
-              failed={
-                item.sendingState === V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_FAILED
-              }
-              footer={
-                <View style={styles.rowFooter}>
-                  <UIKitActionPill
-                    label="查看详情"
-                    tone="primary"
-                    onPress={() => {
-                      openHistoryMessage(item).catch((error) => {
-                        Alert.alert(
-                          '打开失败',
-                          error instanceof Error ? error.message : '当前消息无法打开'
-                        )
-                      })
-                    }}
-                  />
-                </View>
-              }
+            <View style={styles.messageTimeWrap}>
+              <ThemedText style={styles.messageTimeText}>
+                {formatAndroidAlignedListTime(item.createTime)}
+              </ThemedText>
+            </View>
+            <UIKitChatMessageBubble
+              message={item}
+              currentUserId={currentUserId}
+              conversationId={resolvedConversationId}
+              conversationType={conversationType}
+              targetId={targetId}
+              onLongPress={() => undefined}
+              onPressMessage={(message) => {
+                openHistoryMessage(message).catch((error) => {
+                  toast.alert(
+                    t('commonOpenFailed' as never),
+                    error instanceof Error
+                      ? error.message
+                      : t('commonMessageUnavailableOpen' as never)
+                  )
+                })
+              }}
+              onPressReplyMessage={(message) => {
+                openHistoryMessage(message).catch((error) => {
+                  toast.alert(
+                    t('commonOpenFailed' as never),
+                    error instanceof Error
+                      ? error.message
+                      : t('commonMessageUnavailableOpen' as never)
+                  )
+                })
+              }}
+              onReeditMessage={() => undefined}
+              reeditHidden
+              onRetry={() => undefined}
+              downloadingVideoIds={[]}
+              downloadedVideoMap={{}}
+              downloadingFileIds={[]}
+              downloadedFileMap={{}}
+              playingAudioMessageId={null}
+              selectionMode={false}
+              selected={false}
+              selectable={false}
+              onToggleSelect={() => undefined}
+              showReadReceipt={false}
+              readOnly
             />
           </View>
         )}
@@ -389,11 +454,20 @@ const styles = StyleSheet.create({
     gap: 12
   },
   rowWrap: {
-    marginBottom: 12
+    marginBottom: 6
   },
-  rowFooter: {
-    flexDirection: 'row',
-    justifyContent: 'flex-start'
+  messageTimeWrap: {
+    alignItems: 'center',
+    marginBottom: 10
+  },
+  messageTimeText: {
+    color: '#97A2B2',
+    fontSize: 12,
+    lineHeight: 18,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF'
   }
 })
 

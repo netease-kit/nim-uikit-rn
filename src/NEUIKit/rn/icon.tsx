@@ -1,6 +1,5 @@
-import { Image } from 'expo-image'
 import React from 'react'
-import { ImageStyle, StyleProp } from 'react-native'
+import { Image, ImageStyle, StyleProp, StyleSheet, View, ViewStyle } from 'react-native'
 
 import IconA1 from '../static/icons/icon-a-1.png'
 import IconA2 from '../static/icons/icon-a-2.png'
@@ -76,6 +75,12 @@ const iconSources = {
   logo: require('../static/logo.png'),
   'send-more': require('../static/send-more.png'),
   sending: require('../static/icons/sending.png'),
+  'audio-play-left-1': require('../static/icons/audio-play-left-1.png'),
+  'audio-play-left-2': require('../static/icons/audio-play-left-2.png'),
+  'audio-play-left-3': require('../static/icons/audio-play-left-3.png'),
+  'audio-play-right-1': require('../static/icons/audio-play-right-1.png'),
+  'audio-play-right-2': require('../static/icons/audio-play-right-2.png'),
+  'audio-play-right-3': require('../static/icons/audio-play-right-3.png'),
   'toolbar-voice': require('../static/audio.png'),
   'tab-conversation': require('../static/conversation.png'),
   'tab-conversation-selected': require('../static/conversation-selected.png'),
@@ -85,6 +90,7 @@ const iconSources = {
   'tab-me-selected': require('../static/me-selected.png'),
   'icon-More': require('../static/icons/icon-More.png'),
   'icon-more': require('../static/icons/icon-More.png'),
+  'icon-addition': require('../static/icons/icon-addition.png'),
   'icon-a-1': IconA1,
   'icon-a-2': IconA2,
   'icon-a-3': IconA3,
@@ -159,22 +165,33 @@ const iconSources = {
   'icon-cancel-mute': require('../static/icons/icon-cancel-mute.png'),
   'icon-cancel-top': require('../static/icons/icon-cancel-top.png'),
   'icon-chat-history': require('../static/icons/icon-chat-history.png'),
+  'icon-team-all-avatar': require('../static/icons/icon-team-all-avatar.png'),
   'icon-chuangjianqunzu': require('../static/icons/icon-chuangjianqunzu.png'),
   'icon-delete': require('../static/icons/icon-delete.png'),
   'icon-down-arrow': require('../static/icons/icon-down-arrow.png'),
   'icon-down-arrow-white': require('../static/icons/icon-down-arrow-white.png'),
   'icon-duoxuan': require('../static/icons/icon-duoxuan.png'),
   'icon-error': require('../static/icons/icon-error.png'),
+  'icon-contact-black-list': require('../static/icons/icon-contact-black-list.png'),
+  'icon-contact-ai-user': require('../static/icons/icon-contact-ai-user.png'),
+  'icon-contact-my-group': require('../static/icons/icon-contact-my-group.png'),
+  'icon-contact-verify-msg': require('../static/icons/icon-contact-verify-msg.png'),
   'icon-friend': require('../static/icons/icon-friend.png'),
   'icon-fuzhi1': require('../static/icons/icon-fuzhi1.png'),
+  'icon-green-pin': require('../static/green-pin.png'),
+  'icon-pin': require('../static/black-pin.png'),
   'icon-guanbi': require('../static/icons/icon-guanbi.png'),
   'icon-guanyu': require('../static/icons/icon-guanyu.png'),
   'icon-huifu': require('../static/icons/icon-huifu.png'),
   'icon-jiantou': require('../static/icons/icon-jiantou.png'),
+  'icon-zuojiantou': require('../static/icons/icon-zuojiantou.png'),
   'icon-join': require('../static/icons/icon-join.png'),
+  'icon-location': require('../static/icons/icon-location.png'),
   'icon-lahei2': require('../static/icons/icon-lahei2.png'),
+  'icon-file': require('../static/icons/icon-file.png'),
   'icon-more-white': require('../static/icons/icon-more-white.png'),
   'icon-mute': require('../static/icons/icon-mute.png'),
+  'icon-qita': require('../static/icons/icon-qita.png'),
   'icon-quxiaozhiding': require('../static/icons/icon-quxiaozhiding.png'),
   'icon-read': require('../static/icons/icon-read.png'),
   'icon-send-default': require('../static/icons/sending.png'),
@@ -182,13 +199,19 @@ const iconSources = {
   'icon-shanchu': require('../static/icons/icon-shanchu.png'),
   'icon-shezhi1': require('../static/icons/icon-shezhi1.png'),
   'icon-shipin': require('../static/icons/icon-shipin.png'),
+  'icon-shipin8': require('../static/icons/icon-shipin8.png'),
+  'icon-shipin2': require('../static/icons/icon-shipin2.png'),
   'icon-sousuo': require('../static/icons/icon-sousuo.png'),
   'icon-tianjiaanniu': require('../static/icons/icon-tianjiaanniu.png'),
+  'icon-conversation-search': require('../static/icons/icon-conversation-search.png'),
+  'icon-conversation-add-friend': require('../static/icons/icon-conversation-add-friend.png'),
+  'icon-conversation-create-team': require('../static/icons/icon-conversation-create-team.png'),
   'icon-team2': require('../static/icons/icon-team2.png'),
   'icon-tianjiahaoyou': require('../static/icons/icon-tianjiahaoyou.png'),
   'icon-top': require('../static/icons/icon-top.png'),
   'icon-tuigejian': require('../static/icons/icon-tuigejian.png'),
   'icon-tupian': require('../static/icons/icon-tupian.png'),
+  'icon-tupian2': require('../static/icons/icon-tupian2.png'),
   'icon-weizhiwenjian': require('../static/icons/icon-weizhiwenjian.png'),
   'icon-wenjian': require('../static/icons/icon-wenjian.png'),
   'icon-warning': require('../static/icons/icon-warning.png'),
@@ -196,14 +219,212 @@ const iconSources = {
   'icon-xiaoxizhiding': require('../static/icons/icon-xiaoxizhiding.png'),
   'icon-yanzheng': require('../static/icons/icon-yanzheng.png'),
   'icon-yidu': require('../static/icons/icon-yidu.png'),
+  'icon-yinle': require('../static/icons/icon-yinle.png'),
+  'icon-yuyin8': require('../static/icons/icon-yuyin8.png'),
+  'icon-Excel': require('../static/icons/icon-Excel.png'),
+  'icon-PPT': require('../static/icons/icon-PPT.png'),
+  'icon-RAR1': require('../static/icons/icon-RAR1.png'),
+  'icon-Word': require('../static/icons/icon-Word.png'),
   'icon-success': require('../static/icons/icon-success.png'),
   'icon-yuyin1': require('../static/icons/icon-yuyin1.png'),
   'icon-collection': require('../static/icons/add-collection.png'),
   'icon-paishe': require('../static/paishe.png'),
-  'icon-zhuanfa': require('../static/icons/icon-zhuanfa.png')
+  'icon-zhuanfa': require('../static/icons/icon-zhuanfa.png'),
+  'icon-multiselect-merge-forward': require('../static/icons/icon-multiselect-merge-forward.png'),
+  'icon-multiselect-serial-forward': require('../static/icons/icon-multiselect-serial-forward.png'),
+  'icon-multiselect-delete': require('../static/icons/icon-multiselect-delete.png')
 } as const
 
 export type NEUIKitIconName = keyof typeof iconSources
+
+export function getUIKitIconSource(type: NEUIKitIconName) {
+  return iconSources[type]
+}
+
+const vectorIconTypes = new Set<NEUIKitIconName>([
+  'icon-zuojiantou',
+  'icon-jiantou',
+  'icon-down-arrow',
+  'icon-down-arrow-white',
+  'icon-More',
+  'icon-more',
+  'icon-more-white',
+  'icon-guanbi',
+  'icon-addition',
+  'icon-sousuo',
+  'icon-conversation-search'
+])
+
+function getVectorIconColor(type: NEUIKitIconName, tintColor?: string) {
+  if (tintColor) {
+    return tintColor
+  }
+
+  if (type === 'icon-down-arrow-white' || type === 'icon-more-white') {
+    return '#FFFFFF'
+  }
+
+  return '#111827'
+}
+
+function renderVectorIcon({
+  type,
+  width,
+  height,
+  color,
+  style
+}: {
+  type: NEUIKitIconName
+  width: number
+  height: number
+  color: string
+  style?: StyleProp<ImageStyle>
+}) {
+  const size = Math.min(width, height)
+  const lineWidth = Math.max(1.6, size / 11)
+  const dotSize = Math.max(3, size / 6)
+  const chevronSize = size * 0.46
+  const containerStyle = [{ width, height }, style] as StyleProp<ViewStyle>
+
+  if (type === 'icon-zuojiantou') {
+    return (
+      <View style={[styles.vectorIcon, containerStyle]}>
+        <View
+          style={[
+            styles.chevron,
+            styles.chevronLeft,
+            {
+              width: chevronSize,
+              height: chevronSize,
+              borderLeftWidth: lineWidth,
+              borderBottomWidth: lineWidth,
+              borderColor: color
+            }
+          ]}
+        />
+      </View>
+    )
+  }
+
+  if (type === 'icon-jiantou') {
+    return (
+      <View style={[styles.vectorIcon, containerStyle]}>
+        <View
+          style={[
+            styles.chevron,
+            styles.chevronRight,
+            {
+              width: chevronSize,
+              height: chevronSize,
+              borderRightWidth: lineWidth,
+              borderTopWidth: lineWidth,
+              borderColor: color
+            }
+          ]}
+        />
+      </View>
+    )
+  }
+
+  if (type === 'icon-down-arrow' || type === 'icon-down-arrow-white') {
+    return (
+      <View style={[styles.vectorIcon, containerStyle]}>
+        <View
+          style={[
+            styles.chevron,
+            styles.chevronDown,
+            {
+              width: chevronSize,
+              height: chevronSize,
+              borderRightWidth: lineWidth,
+              borderBottomWidth: lineWidth,
+              borderColor: color
+            }
+          ]}
+        />
+      </View>
+    )
+  }
+
+  if (type === 'icon-More' || type === 'icon-more' || type === 'icon-more-white') {
+    return (
+      <View style={[styles.vectorIcon, styles.moreIcon, containerStyle]}>
+        {[0, 1, 2].map((index) => (
+          <View
+            key={index}
+            style={[
+              styles.moreDot,
+              { width: dotSize, height: dotSize, borderRadius: dotSize / 2, backgroundColor: color }
+            ]}
+          />
+        ))}
+      </View>
+    )
+  }
+
+  if (type === 'icon-guanbi') {
+    return (
+      <View style={[styles.vectorIcon, containerStyle]}>
+        <View
+          style={[
+            styles.crossLine,
+            { width: size * 0.72, height: lineWidth, backgroundColor: color }
+          ]}
+        />
+        <View
+          style={[
+            styles.crossLine,
+            styles.crossLineReverse,
+            { width: size * 0.72, height: lineWidth, backgroundColor: color }
+          ]}
+        />
+      </View>
+    )
+  }
+
+  if (type === 'icon-addition') {
+    return (
+      <View style={[styles.vectorIcon, containerStyle]}>
+        <View
+          style={[
+            styles.plusLine,
+            { width: size * 0.72, height: lineWidth, backgroundColor: color }
+          ]}
+        />
+        <View
+          style={[
+            styles.plusLine,
+            styles.plusLineVertical,
+            { width: size * 0.72, height: lineWidth, backgroundColor: color }
+          ]}
+        />
+      </View>
+    )
+  }
+
+  return (
+    <View style={[styles.vectorIcon, containerStyle]}>
+      <View
+        style={[
+          styles.searchCircle,
+          {
+            width: size * 0.58,
+            height: size * 0.58,
+            borderRadius: size * 0.29,
+            borderWidth: lineWidth,
+            borderColor: color
+          }
+        ]}
+      />
+      <View
+        style={[
+          styles.searchHandle,
+          { width: size * 0.32, height: lineWidth, backgroundColor: color }
+        ]}
+      />
+    </View>
+  )
+}
 
 export function UIKitIcon({
   type,
@@ -220,11 +441,77 @@ export function UIKitIcon({
   tintColor?: string
   style?: StyleProp<ImageStyle>
 }) {
+  const resolvedWidth = width || size
+  const resolvedHeight = height || size
+
+  if (vectorIconTypes.has(type)) {
+    return renderVectorIcon({
+      type,
+      width: resolvedWidth,
+      height: resolvedHeight,
+      color: getVectorIconColor(type, tintColor),
+      style
+    })
+  }
+
   return (
     <Image
       source={iconSources[type]}
-      style={[{ width: width || size, height: height || size, tintColor }, style]}
-      contentFit="contain"
+      style={[{ width: resolvedWidth, height: resolvedHeight, tintColor }, style]}
+      resizeMode="contain"
     />
   )
 }
+
+const styles = StyleSheet.create({
+  vectorIcon: {
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  chevron: {
+    flexShrink: 0
+  },
+  chevronLeft: {
+    transform: [{ rotate: '45deg' }]
+  },
+  chevronRight: {
+    transform: [{ rotate: '45deg' }]
+  },
+  chevronDown: {
+    transform: [{ rotate: '45deg' }, { translateY: -2 }]
+  },
+  moreIcon: {
+    flexDirection: 'row',
+    gap: 3
+  },
+  moreDot: {
+    flexShrink: 0
+  },
+  crossLine: {
+    position: 'absolute',
+    borderRadius: 999,
+    transform: [{ rotate: '45deg' }]
+  },
+  crossLineReverse: {
+    transform: [{ rotate: '-45deg' }]
+  },
+  plusLine: {
+    position: 'absolute',
+    borderRadius: 999
+  },
+  plusLineVertical: {
+    transform: [{ rotate: '90deg' }]
+  },
+  searchCircle: {
+    position: 'absolute',
+    left: '18%',
+    top: '14%'
+  },
+  searchHandle: {
+    position: 'absolute',
+    right: '14%',
+    bottom: '20%',
+    borderRadius: 999,
+    transform: [{ rotate: '45deg' }]
+  }
+})

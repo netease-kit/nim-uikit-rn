@@ -31,11 +31,8 @@ export function caculateTimeago(dateTimeStamp: number): string {
     datetime.setTime(dateTimeStamp)
     const Nyear = datetime.getFullYear()
     const Nmonth =
-      datetime.getMonth() + 1 < 10
-        ? `0${datetime.getMonth() + 1}`
-        : datetime.getMonth() + 1
-    const Ndate =
-      datetime.getDate() < 10 ? `0${datetime.getDate()}` : datetime.getDate()
+      datetime.getMonth() + 1 < 10 ? `0${datetime.getMonth() + 1}` : datetime.getMonth() + 1
+    const Ndate = datetime.getDate() < 10 ? `0${datetime.getDate()}` : datetime.getDate()
     result = `${Nyear}-${Nmonth}-${Ndate}`
   }
   return result

@@ -1,35 +1,313 @@
+import * as FileSystem from 'expo-file-system/legacy'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
-import React, { useMemo } from 'react'
-import { Alert, Linking, ScrollView, StyleSheet, View } from 'react-native'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Linking, Platform, ScrollView, StyleSheet, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { useFileMessageOpener } from '@/hooks/useFileMessageOpener'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import {
-  UIKitChatComposerShell,
   UIKitChatEmptyState,
   UIKitChatHeaderTitle,
-  UIKitMessageCard
+  UIKitChatMessageBubble,
+  UIKitUserAvatar
 } from '@/src/NEUIKit/rn'
-import { conversationStore, messageStore, nimStore } from '@/stores'
-import { MergedForwardItem, parseMergedForwardPayload } from '@/utils/messageForward'
-import { V2NIMMessageType } from '@/utils/nim-sdk'
+import { messageStore, nimStore } from '@/stores'
+import { translateCurrentApp } from '@/utils/app-language'
+import { getMergedForwardCallPreviewText, isCallMessage } from '@/utils/callMessage'
+import { formatAndroidAlignedListTime } from '@/utils/list-time'
+import { normalizeMediaRenderSource } from '@/utils/media-source'
+import {
+  getForwardPreview,
+  getMergedForwardCacheUri,
+  getMessageKey,
+  MERGED_FORWARD_CUSTOM_TYPE,
+  MERGED_FORWARD_SUBTYPE,
+  MergedForwardItem,
+  MergedForwardPayload,
+  parseMergedForwardPayload,
+  parseStandardMergedForwardData,
+  sanitizeMergedForwardSerializedMessage,
+  splitMergedForwardSerializedContent,
+  StandardMergedForwardData
+} from '@/utils/messageForward'
+import {
+  V2NIMConversationType,
+  V2NIMMessage,
+  V2NIMMessageSendingState,
+  V2NIMMessageType
+} from '@/utils/nim-sdk'
 
-function renderItemPreview(item: MergedForwardItem) {
-  if (item.mergedPayload) {
-    return '[聊天记录]'
+type MergedForwardDisplayMessage = V2NIMMessage & {
+  subType?: number
+  senderName?: string
+  senderAvatar?: string
+}
+
+type DetailState = {
+  loading: boolean
+  payload: MergedForwardPayload | null
+  error: string | null
+}
+
+const MERGED_MESSAGE_NICK_KEY = 'mergedMessageNickKey'
+const MERGED_MESSAGE_AVATAR_KEY = 'mergedMessageAvatarKey'
+const MERGED_FORWARD_DOWNLOAD_TIMEOUT_MS = 8000
+const MERGED_FORWARD_LOAD_FAILED = 'mergedForwardFetchFailed'
+const MERGED_FORWARD_DOWNLOAD_FAILED = 'mergedForwardDownloadFailed'
+
+function rejectAfterTimeout(errorMessage: string, timeoutMs: number) {
+  return new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+  })
+}
+
+async function downloadMergedForwardPayload(payloadUrl: string, cacheUri: string) {
+  try {
+    await Promise.race([
+      FileSystem.downloadAsync(payloadUrl, cacheUri),
+      rejectAfterTimeout(MERGED_FORWARD_DOWNLOAD_FAILED, MERGED_FORWARD_DOWNLOAD_TIMEOUT_MS)
+    ])
+  } catch (error) {
+    try {
+      const cacheInfo = await FileSystem.getInfoAsync(cacheUri)
+
+      if (cacheInfo.exists) {
+        await FileSystem.deleteAsync(cacheUri, { idempotent: true })
+      }
+    } catch {
+      // Ignore cache cleanup failures; the caller will surface the download failure.
+    }
+
+    throw error
+  }
+}
+
+function parseMergedForwardSenderExtension(message: V2NIMMessage) {
+  try {
+    const extension = JSON.parse(message.serverExtension || '{}') as Record<string, unknown>
+
+    return {
+      senderName:
+        typeof extension[MERGED_MESSAGE_NICK_KEY] === 'string'
+          ? (extension[MERGED_MESSAGE_NICK_KEY] as string)
+          : '',
+      senderAvatar:
+        typeof extension[MERGED_MESSAGE_AVATAR_KEY] === 'string'
+          ? (extension[MERGED_MESSAGE_AVATAR_KEY] as string)
+          : ''
+    }
+  } catch {
+    return {
+      senderName: '',
+      senderAvatar: ''
+    }
+  }
+}
+
+function createMergedDisplayMessage(item: MergedForwardItem, conversationId: string) {
+  const attachment =
+    item.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_CUSTOM
+      ? item.mergedPayload
+        ? {
+            raw: JSON.stringify(item.mergedPayload)
+          }
+        : item.mergedForwardData
+          ? {
+              raw: JSON.stringify({
+                type: MERGED_FORWARD_CUSTOM_TYPE,
+                data: item.mergedForwardData
+              })
+            }
+          : undefined
+      : {
+          name: item.attachmentName,
+          ext: item.attachmentExt,
+          url: item.attachmentUrl,
+          path: item.attachmentUrl,
+          size: item.attachmentSize,
+          duration: item.attachmentDuration,
+          durations: item.attachmentDurations,
+          status: item.attachmentStatus,
+          type: item.attachmentType,
+          width: item.attachmentWidth,
+          height: item.attachmentHeight,
+          address: item.attachmentAddress,
+          latitude: item.attachmentLatitude,
+          longitude: item.attachmentLongitude
+        }
+
+  return {
+    messageClientId: item.messageId,
+    messageServerId: item.messageId,
+    conversationId,
+    senderId: item.senderId,
+    receiverId: '',
+    isSelf: item.senderId === nimStore.getLoginUser(),
+    createTime: item.createTime,
+    text: item.text || item.preview,
+    messageType: item.messageType,
+    subType: item.mergedPayload ? MERGED_FORWARD_SUBTYPE : undefined,
+    attachment,
+    sendingState: V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED,
+    senderName: item.senderName,
+    senderAvatar: item.senderAvatar
+  } as MergedForwardDisplayMessage
+}
+
+function buildPayloadFromMessages(messages: V2NIMMessage[], fallbackTitle: string) {
+  const sortedMessages = messages.slice().sort((left, right) => left.createTime - right.createTime)
+  const items: MergedForwardItem[] = sortedMessages.map((message) => {
+    const senderExtension = parseMergedForwardSenderExtension(message)
+    const senderName =
+      senderExtension.senderName ||
+      (message as MergedForwardDisplayMessage).senderName ||
+      message.senderId
+
+    return {
+      messageId: getMessageKey(message),
+      senderId: message.senderId,
+      senderName,
+      senderAvatar:
+        senderExtension.senderAvatar || (message as MergedForwardDisplayMessage).senderAvatar,
+      createTime: message.createTime,
+      messageType: message.messageType,
+      preview: getForwardPreview(message, 'merged'),
+      text: message.text,
+      attachmentName: (message.attachment as { name?: string } | undefined)?.name,
+      attachmentExt: (message.attachment as { ext?: string } | undefined)?.ext,
+      attachmentUrl:
+        (message.attachment as { url?: string; path?: string } | undefined)?.url ||
+        (message.attachment as { url?: string; path?: string } | undefined)?.path,
+      attachmentSize: (message.attachment as { size?: number } | undefined)?.size,
+      attachmentDuration: (message.attachment as { duration?: number } | undefined)?.duration,
+      attachmentDurations: (
+        message.attachment as { durations?: { duration?: number }[] } | undefined
+      )?.durations,
+      attachmentStatus: (message.attachment as { status?: number | string } | undefined)?.status,
+      attachmentType: (message.attachment as { type?: number | string } | undefined)?.type,
+      attachmentWidth: (message.attachment as { width?: number } | undefined)?.width,
+      attachmentHeight: (message.attachment as { height?: number } | undefined)?.height,
+      attachmentAddress: (message.attachment as { address?: string } | undefined)?.address,
+      attachmentLatitude: (message.attachment as { latitude?: number } | undefined)?.latitude,
+      attachmentLongitude: (message.attachment as { longitude?: number } | undefined)?.longitude,
+      mergedPayload: parseMergedForwardPayload(message) || undefined,
+      mergedForwardData: parseStandardMergedForwardData(message) || undefined
+    }
+  })
+
+  return {
+    title: fallbackTitle,
+    previewList: items.slice(0, 3).map((item) => `${item.senderName}: ${item.preview}`),
+    nestedLevel: 1,
+    messages: items
+  } as MergedForwardPayload
+}
+
+async function loadStandardMergedForwardPayloadFromData(data: StandardMergedForwardData) {
+  if (!data?.url) {
+    return null
   }
 
-  return item.preview
+  const payloadUrl = normalizeMediaRenderSource(data.url)
+  if (!payloadUrl) {
+    return null
+  }
+
+  const content =
+    Platform.OS === 'web'
+      ? await fetch(payloadUrl).then(async (response) => {
+          if (!response.ok) {
+            throw new Error(MERGED_FORWARD_DOWNLOAD_FAILED)
+          }
+
+          return response.text()
+        })
+      : await (async () => {
+          const cacheUri = await getMergedForwardCacheUri({
+            messageClientId: `${data.md5 || payloadUrl}`,
+            messageServerId: `${data.md5 || payloadUrl}`
+          })
+          const cacheInfo = await FileSystem.getInfoAsync(cacheUri)
+
+          if (!cacheInfo.exists) {
+            await downloadMergedForwardPayload(payloadUrl, cacheUri)
+          }
+
+          return FileSystem.readAsStringAsync(cacheUri)
+        })()
+  const { serializedMessages } = splitMergedForwardSerializedContent(content)
+
+  if (!serializedMessages.length || !nimStore.nim) {
+    return null
+  }
+
+  const messages = serializedMessages
+    .map((item) => {
+      const serializedForCurrentPlatform =
+        Platform.OS === 'android' ? sanitizeMergedForwardSerializedMessage(item) : item
+
+      try {
+        return nimStore.nim!.V2NIMMessageConverter.messageDeserialization(
+          serializedForCurrentPlatform
+        )
+      } catch (error) {
+        const fallback = sanitizeMergedForwardSerializedMessage(item)
+
+        if (fallback === serializedForCurrentPlatform) {
+          return null
+        }
+
+        try {
+          return nimStore.nim!.V2NIMMessageConverter.messageDeserialization(fallback)
+        } catch {
+          console.warn('merged-forward-detail: skip invalid serialized message', error)
+          return null
+        }
+      }
+    })
+    .filter(Boolean) as V2NIMMessage[]
+
+  if (!messages.length) {
+    return null
+  }
+
+  const title = data.sessionName
+    ? `__MERGED_FORWARD_TITLE__${data.sessionName}`
+    : '__MERGED_FORWARD_FALLBACK__'
+
+  return buildPayloadFromMessages(messages, title)
+}
+
+async function loadStandardMergedForwardPayload(message: V2NIMMessage) {
+  const data = parseStandardMergedForwardData(message)
+
+  if (!data) {
+    return null
+  }
+
+  return loadStandardMergedForwardPayloadFromData(data)
 }
 
 async function openMergedItem(item: MergedForwardItem) {
   if (item.mergedPayload) {
     router.push({
-      pathname: '/chat/message-preview',
+      pathname: '/chat/merged-forward-detail',
       params: {
-        title: item.mergedPayload.title,
-        content: item.mergedPayload.previewList.join('\n')
+        payload: JSON.stringify(item.mergedPayload)
+      }
+    } as never)
+    return
+  }
+
+  if (item.mergedForwardData) {
+    router.push({
+      pathname: '/chat/merged-forward-detail',
+      params: {
+        standardData: JSON.stringify(item.mergedForwardData)
       }
     } as never)
     return
@@ -40,7 +318,9 @@ async function openMergedItem(item: MergedForwardItem) {
       pathname: '/chat/media-viewer',
       params: {
         uri: item.attachmentUrl,
-        type: 'image'
+        type: 'image',
+        name: item.attachmentName || '',
+        ext: item.attachmentExt || ''
       }
     } as never)
     return
@@ -51,7 +331,9 @@ async function openMergedItem(item: MergedForwardItem) {
       pathname: '/chat/media-viewer',
       params: {
         uri: item.attachmentUrl,
-        type: 'video'
+        type: 'video',
+        name: item.attachmentName || '',
+        ext: item.attachmentExt || ''
       }
     } as never)
     return
@@ -69,164 +351,333 @@ async function openMergedItem(item: MergedForwardItem) {
     return
   }
 
-  if (
-    (item.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_FILE ||
-      item.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_AUDIO) &&
-    item.attachmentUrl
-  ) {
-    if (item.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_FILE) {
-      router.push({
-        pathname: '/chat/file-detail',
-        params: {
-          uri: item.attachmentUrl,
-          name: item.attachmentName,
-          size: `${item.attachmentSize || 0}`
-        }
-      } as never)
-      return
-    }
-
+  if (item.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_AUDIO && item.attachmentUrl) {
     const canOpen = await Linking.canOpenURL(item.attachmentUrl)
 
     if (!canOpen) {
-      Alert.alert('打开失败', '当前设备无法直接打开该附件')
+      toast.alert(
+        translateCurrentApp('mediaViewerOpenFailedTitle' as never),
+        translateCurrentApp('mergedForwardAttachmentOpenUnsupported' as never)
+      )
       return
     }
 
     await Linking.openURL(item.attachmentUrl)
-    return
   }
-
-  router.push({
-    pathname: '/chat/message-preview',
-    params: {
-      title: '消息详情',
-      content: item.text || item.preview || renderItemPreview(item)
-    }
-  } as never)
 }
 
-function buildBubbleLabel(item: MergedForwardItem) {
-  switch (item.messageType) {
-    case V2NIMMessageType.V2NIM_MESSAGE_TYPE_IMAGE:
-      return '图片消息'
-    case V2NIMMessageType.V2NIM_MESSAGE_TYPE_VIDEO:
-      return '视频消息'
-    case V2NIMMessageType.V2NIM_MESSAGE_TYPE_LOCATION:
-      return item.attachmentAddress || '位置消息'
-    case V2NIMMessageType.V2NIM_MESSAGE_TYPE_FILE:
-      return item.attachmentName || '文件消息'
-    case V2NIMMessageType.V2NIM_MESSAGE_TYPE_AUDIO:
-      return `语音 ${item.attachmentDuration || 0}s`
-    default:
-      return renderItemPreview(item)
+function shouldShowTimeDivider(previousTime: number | null, currentTime: number) {
+  if (!previousTime) {
+    return true
   }
+
+  return currentTime - previousTime > 5 * 60 * 1000
 }
 
 const MergedForwardDetailScreen = observer(() => {
-  const { conversationId, messageId } = useLocalSearchParams<{
+  const { t } = useAppTranslation()
+  const {
+    conversationId,
+    messageId,
+    payload: payloadParam,
+    standardData: standardDataParam
+  } = useLocalSearchParams<{
     conversationId?: string
     messageId?: string
+    payload?: string
+    standardData?: string
   }>()
+  const [state, setState] = useState<DetailState>({
+    loading: false,
+    payload: null,
+    error: null
+  })
+  const { downloadingFileIds, downloadedFileMap, fileDownloadProgressMap, openFileMessage } =
+    useFileMessageOpener()
 
+  const resolvedConversationId =
+    typeof conversationId === 'string' ? conversationId : 'merged-forward-detail'
   const mergedMessage =
     typeof conversationId === 'string' && typeof messageId === 'string'
       ? messageStore.getMessageById(conversationId, messageId)
       : null
-  const conversation =
-    typeof conversationId === 'string' ? conversationStore.getConversation(conversationId) : null
-  const currentUserId = nimStore.getLoginUser()
 
-  const payload = useMemo(
-    () => (mergedMessage ? parseMergedForwardPayload(mergedMessage) : null),
-    [mergedMessage]
-  )
+  const immediatePayload = useMemo(() => {
+    if (typeof payloadParam === 'string' && payloadParam) {
+      try {
+        return JSON.parse(payloadParam) as MergedForwardPayload
+      } catch {
+        return null
+      }
+    }
 
-  const handleItemPress = (item: MergedForwardItem) => {
-    openMergedItem(item).catch((error) => {
-      Alert.alert('打开失败', error instanceof Error ? error.message : '当前消息无法打开')
+    return mergedMessage ? parseMergedForwardPayload(mergedMessage) : null
+  }, [mergedMessage, payloadParam])
+
+  const standardForwardData = useMemo(() => {
+    if (typeof standardDataParam !== 'string' || !standardDataParam) {
+      return null
+    }
+
+    try {
+      return JSON.parse(standardDataParam) as StandardMergedForwardData
+    } catch {
+      return null
+    }
+  }, [standardDataParam])
+
+  const failAndGoBack = useMemo(() => {
+    let handled = false
+
+    return () => {
+      if (handled) {
+        return
+      }
+
+      handled = true
+      toast.info(t('mergedForwardFetchFailed'))
+      router.back()
+    }
+  }, [t])
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (immediatePayload) {
+      setState({
+        loading: false,
+        payload: immediatePayload,
+        error: null
+      })
+      return
+    }
+
+    if (standardForwardData) {
+      setState((current) => ({
+        ...current,
+        loading: true,
+        error: null
+      }))
+
+      loadStandardMergedForwardPayloadFromData(standardForwardData)
+        .then((payload) => {
+          if (cancelled) {
+            return
+          }
+
+          setState({
+            loading: false,
+            payload,
+            error: payload ? null : MERGED_FORWARD_LOAD_FAILED
+          })
+
+          if (!payload) {
+            failAndGoBack()
+          }
+        })
+        .catch((error) => {
+          if (cancelled) {
+            return
+          }
+
+          console.warn('merged-forward-detail: load standard data failed', error)
+          setState({
+            loading: false,
+            payload: null,
+            error: MERGED_FORWARD_LOAD_FAILED
+          })
+          failAndGoBack()
+        })
+
+      return () => {
+        cancelled = true
+      }
+    }
+
+    if (!mergedMessage) {
+      setState({
+        loading: false,
+        payload: null,
+        error: MERGED_FORWARD_LOAD_FAILED
+      })
+      failAndGoBack()
+      return
+    }
+
+    setState((current) => ({
+      ...current,
+      loading: true,
+      error: null
+    }))
+
+    loadStandardMergedForwardPayload(mergedMessage)
+      .then((payload) => {
+        if (cancelled) {
+          return
+        }
+
+        setState({
+          loading: false,
+          payload,
+          error: payload ? null : MERGED_FORWARD_LOAD_FAILED
+        })
+
+        if (!payload) {
+          failAndGoBack()
+        }
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return
+        }
+
+        console.warn('merged-forward-detail: load message payload failed', error)
+        setState({
+          loading: false,
+          payload: null,
+          error: MERGED_FORWARD_LOAD_FAILED
+        })
+        failAndGoBack()
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [failAndGoBack, immediatePayload, mergedMessage, standardForwardData, t])
+
+  const displayMessages = useMemo(() => {
+    return (
+      state.payload?.messages.map((item) => ({
+        item,
+        message: createMergedDisplayMessage(item, resolvedConversationId)
+      })) || []
+    )
+  }, [resolvedConversationId, state.payload?.messages])
+  const resolvedTitle = t('chatMergedForwardFooter')
+
+  const handleItemPress = (item: MergedForwardItem, message: MergedForwardDisplayMessage) => {
+    const openTask =
+      item.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_FILE
+        ? openFileMessage(message)
+        : openMergedItem(item)
+
+    openTask.catch((error) => {
+      toast.alert(
+        t('mediaViewerOpenFailedTitle'),
+        error instanceof Error ? error.message : t('mergedForwardOpenMessageFailed')
+      )
     })
+  }
+
+  const renderPlaceholderMessage = (
+    item: MergedForwardItem,
+    message: MergedForwardDisplayMessage
+  ) => {
+    const placeholderText =
+      item.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_AUDIO
+        ? translateCurrentApp('commonAudioMessage')
+        : isCallMessage(message)
+          ? getMergedForwardCallPreviewText(message)
+          : item.preview
+
+    return (
+      <View style={styles.placeholderRow}>
+        <View pointerEvents="none" style={styles.placeholderAvatarWrap}>
+          <UIKitUserAvatar
+            account={item.senderId}
+            avatar={item.senderAvatar}
+            fallbackLabel={item.senderName || item.senderId}
+            size={42}
+          />
+        </View>
+        <View style={styles.placeholderContent}>
+          <ThemedText numberOfLines={1} style={styles.placeholderSenderName}>
+            {item.senderName || item.senderId}
+          </ThemedText>
+          <View style={[styles.placeholderBubble, styles.placeholderBubbleOther]}>
+            <ThemedText
+              numberOfLines={1}
+              style={[styles.placeholderText, styles.placeholderTextOther]}
+            >
+              {placeholderText}
+            </ThemedText>
+          </View>
+        </View>
+      </View>
+    )
   }
 
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen
         options={{
-          headerTitle: () => <UIKitChatHeaderTitle title={payload?.title || '聊天记录'} />,
+          headerTitle: () => <UIKitChatHeaderTitle title={resolvedTitle} />,
           headerTitleAlign: 'center',
           headerShadowVisible: false,
           headerStyle: { backgroundColor: '#FFFFFF' }
         }}
       />
 
-      {!payload ? (
+      {state.loading ? (
+        <View style={styles.loadingContainer}>
+          <ThemedText style={styles.loadingText}>{t('mergedForwardLoading')}</ThemedText>
+        </View>
+      ) : !state.payload ? (
         <UIKitChatEmptyState
-          title="聊天记录不存在"
-          description="当前合并转发内容还没有同步完成。"
+          title={t('mergedForwardNotFound')}
+          description={state.error || t('mergedForwardUnavailableDescription')}
         />
       ) : (
-        <>
-          <ScrollView contentContainerStyle={styles.content}>
-            <ThemedText style={styles.timestamp}>
-              {new Date(mergedMessage?.createTime || Date.now()).toLocaleString()}
-            </ThemedText>
+        <ScrollView contentContainerStyle={styles.content}>
+          {displayMessages.map(({ item, message }, index) => {
+            const previousTime = index > 0 ? state.payload!.messages[index - 1].createTime : null
+            const showTimeDivider = shouldShowTimeDivider(previousTime, item.createTime)
 
-            {payload.messages.map((item) => {
-              const isSelf = item.senderId === currentUserId
-
-              return (
-                <View
-                  key={item.messageId}
-                  style={[styles.row, isSelf ? styles.rowSelf : styles.rowOther]}
-                >
-                  {!isSelf ? (
-                    <View style={styles.avatarDot}>
-                      <ThemedText style={styles.avatarText}>
-                        {item.senderName.slice(0, 2)}
-                      </ThemedText>
-                    </View>
-                  ) : null}
-                  <View style={[styles.bubbleWrap, isSelf && styles.bubbleWrapSelf]}>
-                    <UIKitMessageCard
-                      title={item.senderName}
-                      subtitle={new Date(item.createTime).toLocaleTimeString()}
-                      preview={buildBubbleLabel(item)}
-                      highlightedPreview={
-                        item.mergedPayload ? (
-                          <View style={styles.nestedCard}>
-                            <ThemedText numberOfLines={1} style={styles.nestedTitle}>
-                              {item.mergedPayload.title}
-                            </ThemedText>
-                            {item.mergedPayload.previewList.slice(0, 3).map((line, index) => (
-                              <ThemedText
-                                key={`${item.messageId}-${index}`}
-                                numberOfLines={1}
-                                style={styles.nestedLine}
-                              >
-                                {line}
-                              </ThemedText>
-                            ))}
-                          </View>
-                        ) : undefined
-                      }
-                      style={[styles.messageCard, isSelf && styles.messageCardSelf]}
-                      onPress={() => handleItemPress(item)}
-                    />
+            return (
+              <View key={getMessageKey(message)}>
+                {showTimeDivider ? (
+                  <View style={styles.timeDivider}>
+                    <ThemedText style={styles.timeDividerText}>
+                      {formatAndroidAlignedListTime(item.createTime)}
+                    </ThemedText>
                   </View>
-                  {isSelf ? (
-                    <View style={[styles.avatarDot, styles.avatarDotSelf]}>
-                      <ThemedText style={styles.avatarText}>我</ThemedText>
-                    </View>
-                  ) : null}
-                </View>
-              )
-            })}
-          </ScrollView>
-
-          <UIKitChatComposerShell
-            placeholder={conversation?.name ? `发送给 ${conversation.name}` : '发送给 当前会话'}
-          />
-        </>
+                ) : null}
+                {item.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_AUDIO ||
+                item.messageType === V2NIMMessageType.V2NIM_MESSAGE_TYPE_CALL ? (
+                  renderPlaceholderMessage(item, message)
+                ) : (
+                  <UIKitChatMessageBubble
+                    message={message}
+                    currentUserId={nimStore.getLoginUser()}
+                    conversationId={resolvedConversationId}
+                    conversationType={V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P}
+                    targetId={item.senderId}
+                    onLongPress={() => undefined}
+                    onPressMessage={() => handleItemPress(item, message)}
+                    onPressReplyMessage={() => undefined}
+                    onReeditMessage={() => undefined}
+                    reeditHidden
+                    onRetry={() => undefined}
+                    downloadingVideoIds={[]}
+                    downloadedVideoMap={{}}
+                    downloadingFileIds={downloadingFileIds}
+                    downloadedFileMap={downloadedFileMap}
+                    fileDownloadProgressMap={fileDownloadProgressMap}
+                    selectionMode={false}
+                    selected={false}
+                    selectable={false}
+                    onToggleSelect={() => undefined}
+                    showReadReceipt={false}
+                    readOnly
+                    disableAvatarPress
+                    senderNameOverride={item.senderName || item.senderId}
+                    senderAvatarOverride={item.senderAvatar}
+                  />
+                )}
+              </View>
+            )
+          })}
+        </ScrollView>
       )}
     </ThemedView>
   )
@@ -238,71 +689,63 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF'
   },
   content: {
-    paddingHorizontal: 18,
-    paddingTop: 26,
-    paddingBottom: 36
+    paddingHorizontal: 16,
+    paddingBottom: 24,
+    paddingTop: 8
   },
-  timestamp: {
-    alignSelf: 'center',
-    color: '#BCC4D0',
-    fontSize: 17,
-    lineHeight: 24,
-    marginBottom: 28
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    marginBottom: 18
-  },
-  rowOther: {
-    justifyContent: 'flex-start'
-  },
-  rowSelf: {
-    justifyContent: 'flex-end'
-  },
-  avatarDot: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#7A4CE0',
+  loadingContainer: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center'
   },
-  avatarDotSelf: {
-    backgroundColor: '#4F76ED'
+  loadingText: {
+    color: '#666666',
+    fontSize: 14
   },
-  avatarText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '700'
+  timeDivider: {
+    alignItems: 'center',
+    marginBottom: 12,
+    marginTop: 16
   },
-  bubbleWrap: {
-    maxWidth: '80%',
-    marginLeft: 12
+  timeDividerText: {
+    color: '#999999',
+    fontSize: 12
   },
-  bubbleWrapSelf: {
-    marginLeft: 0,
-    marginRight: 12
+  placeholderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 18
   },
-  messageCard: {
-    backgroundColor: '#EEF2F7'
+  placeholderAvatarWrap: {
+    marginRight: 8
   },
-  messageCardSelf: {
-    backgroundColor: '#DCEBFF'
+  placeholderContent: {
+    alignItems: 'flex-start',
+    flexShrink: 1,
+    maxWidth: '80%'
   },
-  nestedCard: {
-    gap: 4
+  placeholderSenderName: {
+    color: '#9098A3',
+    fontSize: 12,
+    lineHeight: 17,
+    marginBottom: 4,
+    maxWidth: 220
   },
-  nestedTitle: {
-    color: '#2A313F',
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: '700'
+  placeholderBubble: {
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderRadius: 20
   },
-  nestedLine: {
-    color: '#5E697A',
-    fontSize: 14,
-    lineHeight: 20
+  placeholderBubbleOther: {
+    backgroundColor: '#F2F5F8',
+    borderTopLeftRadius: 8
+  },
+  placeholderText: {
+    fontSize: 16,
+    lineHeight: 24
+  },
+  placeholderTextOther: {
+    color: '#263242'
   }
 })
 

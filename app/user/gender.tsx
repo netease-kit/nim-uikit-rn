@@ -1,70 +1,53 @@
-import { useNavigation } from '@react-navigation/native'
-import { Stack } from 'expo-router'
+import { router, Stack } from 'expo-router'
 import { observer } from 'mobx-react-lite'
-import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, Pressable, StyleSheet, View } from 'react-native'
+import React, { useState } from 'react'
+import { Pressable, StyleSheet, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
-import { UIKitPage } from '@/src/NEUIKit/rn'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
+import { UIKitHeaderBackButton, UIKitPage } from '@/src/NEUIKit/rn'
 import { userStore } from '@/stores'
-import { ensureNetworkAvailable, NETWORK_UNAVAILABLE_MESSAGE } from '@/utils/network'
-
-const options = [
-  { label: '男', value: 1 },
-  { label: '女', value: 2 }
-] as const
+import { NETWORK_UNAVAILABLE_MESSAGE } from '@/utils/network'
 
 const GenderScreen = observer(() => {
-  const navigation = useNavigation()
-  const currentGender = userStore.selfProfile?.gender ?? 1
+  const { t } = useAppTranslation()
+  const currentGender = userStore.selfProfile?.gender ?? 0
   const [selectedValue, setSelectedValue] = useState(currentGender)
-  const isLeavingRef = useRef(false)
+  const options = [
+    { label: t('genderUnknown'), value: 0 },
+    { label: t('genderMale'), value: 1 },
+    { label: t('genderFemale'), value: 2 }
+  ] as const
 
-  const handleBack = useCallback(
-    async (action: Parameters<typeof navigation.dispatch>[0]) => {
-      if (isLeavingRef.current) {
-        navigation.dispatch(action)
-        return
-      }
+  const handleBack = async () => {
+    if (selectedValue === currentGender) {
+      router.back()
+      return
+    }
 
-      isLeavingRef.current = true
+    router.back()
 
-      if (selectedValue === currentGender) {
-        navigation.dispatch(action)
-        return
-      }
-
-      try {
-        await ensureNetworkAvailable()
-        await userStore.updateSelfProfile({ gender: selectedValue })
-        navigation.dispatch(action)
-      } catch (error) {
-        navigation.dispatch(action)
-        const message = error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE
-        setTimeout(() => {
-          Alert.alert('保存失败', message)
-        }, 0)
-      }
-    },
-    [currentGender, navigation, selectedValue]
-  )
-
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
-      if (isLeavingRef.current) {
-        return
-      }
-
-      event.preventDefault()
-      void handleBack(event.data.action)
-    })
-
-    return unsubscribe
-  }, [handleBack, navigation])
+    try {
+      await userStore.updateSelfProfile({ gender: selectedValue || undefined })
+    } catch (error) {
+      toast.alert(
+        t('saveFailed'),
+        error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE
+      )
+    }
+  }
 
   return (
     <UIKitPage style={styles.page}>
-      <Stack.Screen options={{ title: '性别', headerTitleAlign: 'center' }} />
+      <Stack.Screen
+        options={{
+          title: t('genderTitle'),
+          headerTitleAlign: 'center',
+          headerBackButtonDisplayMode: 'minimal',
+          headerLeft: () => <UIKitHeaderBackButton onPress={() => void handleBack()} />
+        }}
+      />
 
       <View style={styles.card}>
         {options.map((option, index) => {
@@ -91,11 +74,13 @@ const GenderScreen = observer(() => {
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    padding: 16
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    backgroundColor: '#EEF2F7'
   },
   card: {
     marginTop: 8,
-    borderRadius: 24,
+    borderRadius: 16,
     backgroundColor: '#FFFFFF',
     overflow: 'hidden'
   },

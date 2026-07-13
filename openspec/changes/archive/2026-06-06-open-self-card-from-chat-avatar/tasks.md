@@ -1,0 +1,5 @@
+- [x] Inspect current chat avatar press behavior and profile route resolver.
+- [x] Add OpenSpec requirement for opening self profile from chat avatar.
+- [x] Make self-message avatar clickable.
+- [x] Route current account to the self profile page.
+- [x] Validate TypeScript, lint, and OpenSpec change.

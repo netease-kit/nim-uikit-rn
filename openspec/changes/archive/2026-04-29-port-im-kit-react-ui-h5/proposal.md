@@ -17,6 +17,7 @@
 ## Capabilities
 
 ### New Capabilities
+
 - `auth-form-and-sms`: 登录页 UI、手机号与验证码输入规则、验证码请求与倒计时策略。
 - `auth-session-lifecycle`: 自动登录、退出登录、多端登录冲突和注册同意弹窗。
 - `conversation-list-behavior`: 会话列表 UI、排序、未读、置顶、删除、免打扰与空态。

@@ -3,6 +3,7 @@
 这是 `im-feature-foundation` 的可迁移打包目录。
 
 用途：
+
 - 把当前仓库中的母 Skill 导出到别的仓库
 - 给别的项目一个独立可复制的 skill 包入口
 - 作为分发前的整理层，而不是直接修改源 skill 目录
@@ -14,6 +15,7 @@
 - 导出脚本使用说明
 
 真正的 skill 内容来自：
+
 - `skills/im-feature-foundation/`
 
 ## 推荐用法

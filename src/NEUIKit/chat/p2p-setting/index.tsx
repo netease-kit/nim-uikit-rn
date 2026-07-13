@@ -104,7 +104,9 @@ const P2pSetting: React.FC<P2pSettingProps> = observer(({ accountId: propAccount
     try {
       await store.relationStore.setP2PMessageMuteModeActive(
         account,
-        !value ? V2NIMConst.V2NIMP2PMessageMuteMode.V2NIM_P2P_MESSAGE_MUTE_MODE_ON : V2NIMConst.V2NIMP2PMessageMuteMode.V2NIM_P2P_MESSAGE_MUTE_MODE_OFF
+        !value
+          ? V2NIMConst.V2NIMP2PMessageMuteMode.V2NIM_P2P_MESSAGE_MUTE_MODE_ON
+          : V2NIMConst.V2NIMP2PMessageMuteMode.V2NIM_P2P_MESSAGE_MUTE_MODE_OFF
       )
     } catch (error) {
       toast.info(!value ? t('sessionMuteFailText') : t('sessionUnMuteFailText'))

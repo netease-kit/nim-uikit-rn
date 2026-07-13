@@ -52,7 +52,12 @@ const ConversationSearch: React.FC = observer(() => {
         }
       ].filter((item) => item.list.length > 0)
     )
-  }, [store.uiStore.friends, store.relationStore.blacklist, store.userStore.users, store.uiStore.teamList])
+  }, [
+    store.uiStore.friends,
+    store.relationStore.blacklist,
+    store.userStore.users,
+    store.uiStore.teamList
+  ])
 
   // 搜索结果
   const searchResult = useMemo(() => {
@@ -65,7 +70,11 @@ const ConversationSearch: React.FC = observer(() => {
             return {
               ...item,
               list: item.list?.filter((friend: any) => {
-                return friend.alias?.includes(searchText) || friend.name?.includes(searchText) || friend.accountId?.includes(searchText)
+                return (
+                  friend.alias?.includes(searchText) ||
+                  friend.name?.includes(searchText) ||
+                  friend.accountId?.includes(searchText)
+                )
               })
             }
           }
@@ -145,7 +154,12 @@ const ConversationSearch: React.FC = observer(() => {
       <div className="search-wrapper">
         <div className="search-input-wrapper">
           <div className="search-icon-wrapper">
-            <Icon iconClassName="search-icon" size={16} style={{ color: '#A6ADB6' }} type="icon-sousuo" />
+            <Icon
+              iconClassName="search-icon"
+              size={16}
+              style={{ color: '#A6ADB6' }}
+              type="icon-sousuo"
+            />
           </div>
 
           <Input

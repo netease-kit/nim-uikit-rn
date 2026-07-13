@@ -2,26 +2,42 @@ import * as Clipboard from 'expo-clipboard'
 import { router, Stack } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React from 'react'
-import { Alert, Pressable, StyleSheet, View } from 'react-native'
+import { Pressable, StyleSheet, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { ThemedText } from '@/components/ThemedText'
-import { UIKitAvatar, UIKitIcon, UIKitPage } from '@/src/NEUIKit/rn'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { useNavigationLock } from '@/hooks/useNavigationLock'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
+import { getUIKitUserAvatarLabel, UIKitAvatar, UIKitIcon, UIKitPage } from '@/src/NEUIKit/rn'
 import { authStore, userStore } from '@/stores'
 
 const MyScreen = observer(() => {
+  const { t } = useAppTranslation()
+  const { runWithNavigationLock } = useNavigationLock()
+  const insets = useSafeAreaInsets()
   const profile = userStore.selfProfile
   const account = profile?.accountId || authStore.session?.account || '-'
-  const displayName = profile?.name || '未设置昵称'
+  const displayName = profile?.name || account
+  const avatarLabel = getUIKitUserAvatarLabel({ account })
 
   return (
     <UIKitPage style={styles.page}>
       <Stack.Screen options={{ headerShown: false }} />
+      <View style={[styles.headerSpacer, { height: insets.top + 44 }]} />
 
-      <Pressable style={styles.heroCard} onPress={() => router.push('/user/my-detail' as never)}>
+      <Pressable
+        style={styles.heroCard}
+        onPress={() =>
+          runWithNavigationLock(() => {
+            router.push('/user/my-detail' as never)
+          })
+        }
+      >
         <UIKitAvatar
           uri={profile?.avatar}
-          label={profile?.name || authStore.session?.mobile || '我'}
-          size={88}
+          label={avatarLabel || authStore.session?.mobile || t('mySelf')}
+          size={64}
         />
         <View style={styles.heroMeta}>
           <ThemedText style={styles.heroTitle} numberOfLines={1}>
@@ -35,10 +51,10 @@ const MyScreen = observer(() => {
               }
 
               await Clipboard.setStringAsync(account)
-              Alert.alert('已复制账号', account)
+              toast.alert(t('myAccountCopiedTitle'), account)
             }}
           >
-            <ThemedText style={styles.accountText}>帐号:{account}</ThemedText>
+            <ThemedText style={styles.accountText}>{t('myAccountPrefix', { account })}</ThemedText>
           </Pressable>
         </View>
         <UIKitIcon type="icon-jiantou" size={18} tintColor="#A6AFBB" />
@@ -48,15 +64,34 @@ const MyScreen = observer(() => {
         <MenuRow
           icon="icon-guanyu"
           iconColor="#60CFA7"
-          title="关于云信"
-          onPress={() => router.push('/user/aboutNetease' as never)}
+          title={t('myAbout')}
+          onPress={() =>
+            runWithNavigationLock(() => {
+              router.push('/user/aboutNetease' as never)
+            })
+          }
         />
         <MenuDivider />
         <MenuRow
           icon="icon-shezhi1"
           iconColor="#F6B246"
-          title="设置"
-          onPress={() => router.push('/user/setting' as never)}
+          title={t('mySettings')}
+          onPress={() =>
+            runWithNavigationLock(() => {
+              router.push('/user/setting' as never)
+            })
+          }
+        />
+        <MenuDivider />
+        <MenuRow
+          icon="icon-collection"
+          iconColor="#337EFF"
+          title={t('myCollection')}
+          onPress={() =>
+            runWithNavigationLock(() => {
+              router.push('/user/collection' as never)
+            })
+          }
         />
       </View>
     </UIKitPage>
@@ -69,7 +104,7 @@ function MenuRow({
   title,
   onPress
 }: {
-  icon: 'icon-guanyu' | 'icon-shezhi1'
+  icon: 'icon-guanyu' | 'icon-shezhi1' | 'icon-collection'
   iconColor: string
   title: string
   onPress: () => void
@@ -91,8 +126,10 @@ function MenuDivider() {
 
 const styles = StyleSheet.create({
   page: {
-    flex: 1,
-    paddingTop: 34
+    flex: 1
+  },
+  headerSpacer: {
+    backgroundColor: '#FFFFFF'
   },
   heroCard: {
     backgroundColor: '#FFFFFF',
@@ -108,8 +145,8 @@ const styles = StyleSheet.create({
   },
   heroTitle: {
     color: '#333333',
-    fontSize: 24,
-    lineHeight: 32,
+    fontSize: 17,
+    lineHeight: 24,
     fontWeight: '700'
   },
   accountRow: {
@@ -117,7 +154,7 @@ const styles = StyleSheet.create({
   },
   accountText: {
     color: '#666D78',
-    fontSize: 16,
+    fontSize: 14,
     lineHeight: 24
   },
   menuCard: {

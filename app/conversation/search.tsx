@@ -1,76 +1,217 @@
 import { router, Stack } from 'expo-router'
 import { observer } from 'mobx-react-lite'
-import React, { useMemo, useState } from 'react'
-import { Alert, FlatList, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native'
+import React, { Fragment, useCallback, useMemo, useState } from 'react'
+import { SectionList, StyleSheet, Text, type TextStyle, TouchableOpacity, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
-import { ThemedView } from '@/components/ThemedView'
-import { conversationStore, friendStore, nimStore, teamStore, userStore } from '@/stores'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { useNavigationLock } from '@/hooks/useNavigationLock'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
+import {
+  UIKitEmptyState,
+  UIKitRowDivider,
+  UIKitSearchBar,
+  UIKitSectionLabel,
+  UIKitUserAvatar,
+  UIKitWhitePage
+} from '@/src/NEUIKit/rn'
+import {
+  conversationStore,
+  friendStore,
+  getTeamCategory,
+  nimStore,
+  TEAM_CATEGORY,
+  teamStore
+} from '@/stores'
 
-type SearchResult =
-  | { key: string; type: 'conversation'; title: string; subtitle: string; conversationId: string }
-  | { key: string; type: 'friend'; title: string; subtitle: string; accountId: string }
-  | { key: string; type: 'team'; title: string; subtitle: string; teamId: string }
+type FriendSearchRow = {
+  key: string
+  kind: 'friend'
+  accountId: string
+  title: string
+  subtitle: string
+  avatar?: string
+}
+
+type TeamSearchRow = {
+  key: string
+  kind: 'team'
+  teamId: string
+  title: string
+  subtitle: string
+  avatar?: string
+  category: (typeof TEAM_CATEGORY)[keyof typeof TEAM_CATEGORY]
+}
+
+type SearchRow = FriendSearchRow | TeamSearchRow
+
+type SearchSection = {
+  key: string
+  title: string
+  data: SearchRow[]
+}
+
+const SEARCH_RESULT_INITIAL_RENDER_COUNT = 12
+const SEARCH_RESULT_BATCH_RENDER_COUNT = 10
+const SEARCH_RESULT_WINDOW_SIZE = 8
+
+function HighlightedText({
+  text,
+  keyword,
+  style,
+  numberOfLines
+}: {
+  text: string
+  keyword: string
+  style?: TextStyle
+  numberOfLines?: number
+}) {
+  const normalizedKeyword = keyword.trim().toLowerCase()
+  const normalizedText = text.toLowerCase()
+
+  if (!normalizedKeyword) {
+    return (
+      <ThemedText numberOfLines={numberOfLines} ellipsizeMode="tail" style={style}>
+        {text}
+      </ThemedText>
+    )
+  }
+
+  const parts: { value: string; highlighted: boolean }[] = []
+  let cursor = 0
+
+  while (cursor < text.length) {
+    const hit = normalizedText.indexOf(normalizedKeyword, cursor)
+
+    if (hit < 0) {
+      parts.push({ value: text.slice(cursor), highlighted: false })
+      break
+    }
+
+    if (hit > cursor) {
+      parts.push({ value: text.slice(cursor, hit), highlighted: false })
+    }
+
+    parts.push({
+      value: text.slice(hit, hit + keyword.length),
+      highlighted: true
+    })
+    cursor = hit + keyword.length
+  }
+
+  return (
+    <ThemedText numberOfLines={numberOfLines} ellipsizeMode="tail" style={style}>
+      {parts.map((part, index) =>
+        part.highlighted ? (
+          <Text key={`${part.value}-${index}`} style={styles.highlightText}>
+            {part.value}
+          </Text>
+        ) : (
+          <Fragment key={`${part.value}-${index}`}>{part.value}</Fragment>
+        )
+      )}
+    </ThemedText>
+  )
+}
 
 const ConversationSearchScreen = observer(() => {
-  const [keyword, setKeyword] = useState('')
-  const normalizedKeyword = keyword.trim().toLowerCase()
+  const { t } = useAppTranslation()
+  const [inputKeyword, setInputKeyword] = useState('')
+  const [submittedKeyword, setSubmittedKeyword] = useState('')
+  const normalizedKeyword = submittedKeyword.trim().toLowerCase()
+  const { runWithNavigationLock, isNavigationLocked } = useNavigationLock()
+  const friendSections = friendStore.friendSections
+  const friendSearchCandidates = useMemo(
+    () => friendSections.flatMap((section) => section.data),
+    [friendSections]
+  )
 
-  const results = useMemo<SearchResult[]>(() => {
+  const handleChangeKeyword = useCallback((value: string) => {
+    setInputKeyword(value)
+
+    if (!value.trim()) {
+      setSubmittedKeyword('')
+    }
+  }, [])
+
+  const handleSubmitSearch = useCallback(() => {
+    setSubmittedKeyword(inputKeyword.trim())
+  }, [inputKeyword])
+
+  const sections = useMemo<SearchSection[]>(() => {
     if (!normalizedKeyword) {
       return []
     }
 
-    const conversationMatches = conversationStore.search(keyword).map((item) => ({
-      key: `conversation-${item.conversationId}`,
-      type: 'conversation' as const,
-      title: item.name || item.conversationId,
-      subtitle: item.lastMessage?.text || '会话',
-      conversationId: item.conversationId
-    }))
-
-    const friendMatches = friendStore.friendList
+    const friendMatches: FriendSearchRow[] = friendSearchCandidates
       .filter((item) => {
-        const alias = (item.alias || '').toLowerCase()
-        const name = (
-          item.userProfile?.name || userStore.getDisplayName(item.accountId)
-        ).toLowerCase()
+        const name = item.appellation.toLowerCase()
+
         return (
-          alias.includes(normalizedKeyword) ||
           name.includes(normalizedKeyword) ||
           item.accountId.toLowerCase().includes(normalizedKeyword)
         )
       })
       .map((item) => ({
         key: `friend-${item.accountId}`,
-        type: 'friend' as const,
-        title: item.alias || item.userProfile?.name || userStore.getDisplayName(item.accountId),
+        kind: 'friend',
+        accountId: item.accountId,
+        title: item.appellation,
         subtitle: item.accountId,
-        accountId: item.accountId
+        avatar: item.avatar
       }))
 
-    const teamMatches = teamStore.teamList
+    const teamMatches: TeamSearchRow[] = teamStore.teamList
       .filter((item) => (item.name || item.teamId).toLowerCase().includes(normalizedKeyword))
       .map((item) => ({
         key: `team-${item.teamId}`,
-        type: 'team' as const,
+        kind: 'team',
+        teamId: item.teamId,
         title: item.name || item.teamId,
-        subtitle: `群号 ${item.teamId}`,
-        teamId: item.teamId
+        subtitle: t('teamSettingsGroupId', { teamId: item.teamId }),
+        avatar: item.avatar,
+        category: getTeamCategory(item)
       }))
+    const discussionTeamMatches: TeamSearchRow[] = teamMatches.filter(
+      (item) => item.category === TEAM_CATEGORY.DISCUSSION
+    )
+    const advancedTeamMatches: TeamSearchRow[] = teamMatches.filter(
+      (item) => item.category !== TEAM_CATEGORY.DISCUSSION
+    )
 
-    return [...conversationMatches, ...friendMatches, ...teamMatches]
-  }, [keyword, normalizedKeyword])
+    const nextSections: SearchSection[] = []
 
-  const handlePress = async (item: SearchResult) => {
-    if (item.type === 'conversation') {
-      router.push({ pathname: '/chat/[id]', params: { id: item.conversationId } })
-      return
+    if (friendMatches.length > 0) {
+      nextSections.push({
+        key: 'friends',
+        title: t('commonFriend'),
+        data: friendMatches
+      })
     }
 
-    if (item.type === 'friend') {
+    if (discussionTeamMatches.length > 0) {
+      nextSections.push({
+        key: 'discussion-teams',
+        title: t('teamTypeDiscussion'),
+        data: discussionTeamMatches
+      })
+    }
+
+    if (advancedTeamMatches.length > 0) {
+      nextSections.push({
+        key: 'advanced-teams',
+        title: t('teamTypeAdvanced'),
+        data: advancedTeamMatches
+      })
+    }
+
+    return nextSections
+  }, [friendSearchCandidates, normalizedKeyword, t])
+
+  const handlePress = async (item: FriendSearchRow | TeamSearchRow) => {
+    if (item.kind === 'friend') {
       if (!friendStore.friends.has(item.accountId) && nimStore.getLoginUser() !== item.accountId) {
-        Alert.alert('无法打开', '该联系人已失效，请重新选择有效联系人')
+        toast.alert(t('commonOpenFailed'), t('conversationSearchInvalidFriend'))
         return
       }
 
@@ -79,164 +220,160 @@ const ConversationSearchScreen = observer(() => {
         return
       }
 
-      try {
-        await conversationStore.createConversation(conversationId)
+      runWithNavigationLock(() => {
         router.push({ pathname: '/chat/[id]', params: { id: conversationId } })
-      } catch (error) {
-        Alert.alert('打开失败', error instanceof Error ? error.message : '请稍后重试')
-      }
+      })
       return
     }
 
     if (!teamStore.getTeam(item.teamId)) {
-      Alert.alert('无法打开', '该群聊已失效，请重新选择有效群聊')
+      toast.alert(t('commonGroupChat'), t('conversationSearchLeftTeam'))
       return
     }
 
     const conversationId = nimStore.nim?.V2NIMConversationIdUtil.teamConversationId(item.teamId)
     if (!conversationId) {
-      Alert.alert('无法打开', '该群聊会话已失效，请重新选择有效群聊')
+      toast.alert(t('commonGroupChat'), t('conversationSearchLeftTeam'))
       return
     }
 
-    try {
-      await conversationStore.createConversation(conversationId)
+    conversationStore.upsertTeamPlaceholderConversation(conversationId, {
+      teamId: item.teamId,
+      name: item.title,
+      avatar: item.avatar
+    })
+
+    runWithNavigationLock(() => {
       router.push({ pathname: '/chat/[id]', params: { id: conversationId } })
-    } catch (error) {
-      Alert.alert('打开失败', error instanceof Error ? error.message : '请稍后重试')
-    }
+    })
   }
 
   return (
-    <ThemedView style={styles.container}>
+    <UIKitWhitePage style={styles.container}>
       <Stack.Screen
         options={{
-          title: '搜索',
+          title: t('conversationSearchTitle'),
           headerTitleAlign: 'center',
-          headerShown: true,
-          headerRight: () => (
-            <TouchableOpacity
-              style={styles.headerAction}
-              onPress={() => router.push('/conversation/picker' as never)}
-            >
-              <ThemedText style={styles.headerActionText}>建群</ThemedText>
-            </TouchableOpacity>
-          )
+          headerShown: true
         }}
       />
 
-      <View style={styles.searchRow}>
-        <TextInput
-          style={styles.input}
-          placeholder="搜索会话 / 好友 / 群组"
-          value={keyword}
-          onChangeText={setKeyword}
-        />
-        {!!keyword && (
-          <TouchableOpacity style={styles.clearButton} onPress={() => setKeyword('')}>
-            <ThemedText style={styles.clearText}>清空</ThemedText>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      <FlatList
-        data={results}
-        keyExtractor={(item) => item.key}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <ThemedText>{normalizedKeyword ? '未命中任何结果' : '输入关键词开始搜索'}</ThemedText>
-          </View>
-        }
-        renderItem={({ item }) => (
-          <TouchableOpacity style={styles.card} onPress={() => handlePress(item)}>
-            <View style={styles.resultHeader}>
-              <ThemedText type="defaultSemiBold">{item.title}</ThemedText>
-              <View style={styles.resultTypeBadge}>
-                <ThemedText style={styles.resultTypeBadgeText}>
-                  {item.type === 'conversation' ? '会话' : item.type === 'friend' ? '好友' : '群聊'}
-                </ThemedText>
-              </View>
-            </View>
-            <ThemedText style={styles.subText}>{item.subtitle}</ThemedText>
-          </TouchableOpacity>
-        )}
+      <UIKitSearchBar
+        value={inputKeyword}
+        onChangeText={handleChangeKeyword}
+        onSubmitEditing={handleSubmitSearch}
+        placeholder={t('commonSearchKeywordPlaceholder')}
+        style={styles.searchBar}
+        autoFocus
       />
-    </ThemedView>
+
+      <SectionList
+        sections={sections}
+        keyExtractor={(item) => item.key}
+        removeClippedSubviews
+        initialNumToRender={SEARCH_RESULT_INITIAL_RENDER_COUNT}
+        maxToRenderPerBatch={SEARCH_RESULT_BATCH_RENDER_COUNT}
+        windowSize={SEARCH_RESULT_WINDOW_SIZE}
+        updateCellsBatchingPeriod={16}
+        ListEmptyComponent={
+          normalizedKeyword ? (
+            <View style={styles.emptyState}>
+              <UIKitEmptyState title={t('commonUserNotFound')} />
+            </View>
+          ) : (
+            <View style={styles.blankState} />
+          )
+        }
+        renderSectionHeader={({ section }) => (
+          <UIKitSectionLabel label={section.title} style={styles.sectionLabel} />
+        )}
+        renderItem={({ item, index, section }) => {
+          return (
+            <View style={styles.resultWrap}>
+              <TouchableOpacity
+                style={styles.resultRow}
+                onPress={() => handlePress(item)}
+                disabled={isNavigationLocked()}
+              >
+                <UIKitUserAvatar
+                  account={item.kind === 'friend' ? item.accountId : item.teamId}
+                  avatar={item.avatar}
+                  size={42}
+                />
+                <View style={styles.resultBody}>
+                  <HighlightedText
+                    text={item.title}
+                    keyword={submittedKeyword}
+                    style={styles.resultName}
+                    numberOfLines={1}
+                  />
+                  <HighlightedText
+                    text={item.subtitle}
+                    keyword={submittedKeyword}
+                    style={styles.resultSubText}
+                  />
+                </View>
+              </TouchableOpacity>
+              {index < section.data.length - 1 ? <UIKitRowDivider /> : null}
+            </View>
+          )
+        }}
+        contentContainerStyle={styles.listContent}
+        keyboardShouldPersistTaps="handled"
+        stickySectionHeadersEnabled={false}
+      />
+    </UIKitWhitePage>
   )
 })
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
-    padding: 16
+    flex: 1
   },
-  searchRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 12
-  },
-  headerAction: {
-    minWidth: 44,
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  headerActionText: {
-    color: '#337EFF',
-    fontWeight: '700'
-  },
-  input: {
-    flex: 1,
-    minHeight: 48,
-    borderRadius: 14,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#ECE8E5',
-    paddingHorizontal: 14
-  },
-  clearButton: {
-    minWidth: 72,
-    borderRadius: 14,
-    backgroundColor: '#F4F4F5',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  clearText: {
-    color: '#4B5563',
-    fontWeight: '700'
+  searchBar: {
+    marginHorizontal: 20,
+    marginTop: 4,
+    marginBottom: 14
   },
   emptyState: {
-    paddingTop: 56,
-    alignItems: 'center'
+    paddingTop: 48
   },
-  card: {
-    borderRadius: 18,
-    padding: 16,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#ECE8E5',
-    marginBottom: 12
+  blankState: {
+    flex: 1
   },
-  resultHeader: {
+  listContent: {
+    flexGrow: 1
+  },
+  sectionLabel: {
+    marginHorizontal: 20,
+    marginBottom: 8
+  },
+  resultWrap: {
+    backgroundColor: '#FFFFFF'
+  },
+  resultRow: {
+    minHeight: 86,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 12
+    gap: 14,
+    paddingHorizontal: 20
   },
-  resultTypeBadge: {
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    backgroundColor: '#FFF2EC'
+  resultBody: {
+    flex: 1
   },
-  resultTypeBadgeText: {
-    color: '#337EFF',
-    fontSize: 11,
-    fontWeight: '700'
+  resultName: {
+    color: '#333333',
+    fontSize: 17,
+    lineHeight: 24
   },
-  subText: {
-    marginTop: 4,
-    fontSize: 12,
-    color: '#6B7280'
+  resultSubText: {
+    marginTop: 2,
+    color: '#A6AFBB',
+    fontSize: 14,
+    lineHeight: 20
+  },
+  highlightText: {
+    color: '#337EFF'
   }
 })
 

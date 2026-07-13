@@ -58,42 +58,50 @@ constants/
 ## 各层首批文件职责
 
 ### app/login.tsx
+
 - 登录页
 - 表单输入
 - 错误提示
 - 调用 AuthStore
 
 ### app/conversations/index.tsx
+
 - 会话列表页
 - 下拉刷新
 - 会话点击跳转
 
 ### app/chat/[sessionId].tsx
+
 - 聊天详情页
 - 消息列表
 - 输入框
 - 发送按钮
 
 ### stores/AuthStore.ts
+
 - 登录态
 - 登录恢复
 - 登出
 
 ### stores/SessionStore.ts
+
 - 会话列表
 - 未读数
 - 置顶 / 免打扰 / 删除
 
 ### stores/MessageStore.ts
+
 - 历史消息
 - 发送态
 - 失败重试
 - 高级消息能力扩展入口
 
-### services/*
+### services/\*
+
 - 屏蔽底层 SDK / API 差异
 
-### domain/models/*
+### domain/models/\*
+
 - 统一领域模型
 - 不直接暴露原始接口数据结构到 UI
 
@@ -111,6 +119,7 @@ constants/
 ## 标准模块扩展顺序
 
 MVP 之后建议补：
+
 1. `FriendStore.ts` + `contacts/*`
 2. `TeamStore.ts` + `teams/*`
 3. `PreferenceStore.ts` + `settings/*`

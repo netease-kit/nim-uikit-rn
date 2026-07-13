@@ -29,7 +29,9 @@ const MessageRead: React.FC<MessageReadProps> = observer(({ msg }) => {
   const p2pMsgReceiptVisible = store.localOptions.p2pMsgReceiptVisible
 
   /** 会话类型 */
-  const conversationType = nim.V2NIMConversationIdUtil.parseConversationType(msg.conversationId) as unknown as V2NIMConst.V2NIMConversationType
+  const conversationType = nim.V2NIMConversationIdUtil.parseConversationType(
+    msg.conversationId
+  ) as unknown as V2NIMConst.V2NIMConversationType
 
   /**是否是云端会话 */
   const enableV2CloudConversation = store.sdkOptions?.enableV2CloudConversation
@@ -44,14 +46,19 @@ const MessageRead: React.FC<MessageReadProps> = observer(({ msg }) => {
 
   /** 跳转到已读未读详情 */
   const jumpToTeamMsgReadInfo = () => {
-    if (store.connectStore.connectStatus !== V2NIMConst.V2NIMConnectStatus.V2NIM_CONNECT_STATUS_CONNECTED) {
+    if (
+      store.connectStore.connectStatus !==
+      V2NIMConst.V2NIMConnectStatus.V2NIM_CONNECT_STATUS_CONNECTED
+    ) {
       toast.info(t('offlineText'))
       return
     }
 
     // 跳转到消息已读未读详情页
     if (msg.messageClientId && msg.conversationId) {
-      navigate(`${neUiKitRouterPath.messageReadInfo}?messageClientId=${msg.messageClientId}&conversationId=${msg.conversationId}`)
+      navigate(
+        `${neUiKitRouterPath.messageReadInfo}?messageClientId=${msg.messageClientId}&conversationId=${msg.conversationId}`
+      )
     }
   }
 
@@ -65,43 +72,47 @@ const MessageRead: React.FC<MessageReadProps> = observer(({ msg }) => {
   }, [conversationType, msg?.yxRead, msg?.yxUnread])
 
   // 如果消息不是发送成功状态，不显示已读状态
-  if (msg.sendingState !== V2NIMConst.V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED) {
+  if (
+    msg.sendingState !== V2NIMConst.V2NIMMessageSendingState.V2NIM_MESSAGE_SENDING_STATE_SUCCEEDED
+  ) {
     return null
   }
 
   return (
     <div className="msg-read-wrapper">
       {/* P2P 消息已读状态 */}
-      {conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P && p2pMsgReceiptVisible && (
-        <>
-          {p2pMsgRotateDeg === 360 ? (
-            <div className="icon-read-wrapper">
-              <Icon type="icon-read" size={18} />
-            </div>
-          ) : (
-            <div className="sector">
-              <span className="cover-1" style={{ transform: `rotate(${p2pMsgRotateDeg}deg)` }} />
-              <span className={p2pMsgRotateDeg >= 180 ? 'cover-2 cover-3' : 'cover-2'} />
-            </div>
-          )}
-        </>
-      )}
+      {conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_P2P &&
+        p2pMsgReceiptVisible && (
+          <>
+            {p2pMsgRotateDeg === 360 ? (
+              <div className="icon-read-wrapper">
+                <Icon type="icon-read" size={18} />
+              </div>
+            ) : (
+              <div className="sector">
+                <span className="cover-1" style={{ transform: `rotate(${p2pMsgRotateDeg}deg)` }} />
+                <span className={p2pMsgRotateDeg >= 180 ? 'cover-2 cover-3' : 'cover-2'} />
+              </div>
+            )}
+          </>
+        )}
 
       {/* 群组消息已读状态 */}
-      {conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM && teamManagerVisible && (
-        <>
-          {teamMsgRotateDeg === 360 ? (
-            <div className="icon-read-wrapper">
-              <Icon type="icon-read" size={18} />
-            </div>
-          ) : (
-            <div className="sector" onClick={jumpToTeamMsgReadInfo}>
-              <span className="cover-1" style={{ transform: `rotate(${teamMsgRotateDeg}deg)` }} />
-              <span className={teamMsgRotateDeg >= 180 ? 'cover-2 cover-3' : 'cover-2'} />
-            </div>
-          )}
-        </>
-      )}
+      {conversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM &&
+        teamManagerVisible && (
+          <>
+            {teamMsgRotateDeg === 360 ? (
+              <div className="icon-read-wrapper">
+                <Icon type="icon-read" size={18} />
+              </div>
+            ) : (
+              <div className="sector" onClick={jumpToTeamMsgReadInfo}>
+                <span className="cover-1" style={{ transform: `rotate(${teamMsgRotateDeg}deg)` }} />
+                <span className={teamMsgRotateDeg >= 180 ? 'cover-2 cover-3' : 'cover-2'} />
+              </div>
+            )}
+          </>
+        )}
     </div>
   )
 })

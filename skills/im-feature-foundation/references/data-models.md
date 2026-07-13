@@ -5,6 +5,7 @@
 ## User
 
 关键字段：
+
 - userId
 - nickname
 - avatar
@@ -15,6 +16,7 @@
 ## Session
 
 关键字段：
+
 - sessionId
 - type: p2p | team
 - targetId
@@ -29,6 +31,7 @@
 ## Message
 
 关键字段：
+
 - messageId
 - clientId
 - sessionId
@@ -46,6 +49,7 @@
 ## FriendApplication
 
 关键字段：
+
 - applicationId
 - fromUserId
 - toUserId
@@ -56,6 +60,7 @@
 ## Team
 
 关键字段：
+
 - teamId
 - name
 - avatar
@@ -67,6 +72,7 @@
 ## TeamMember
 
 关键字段：
+
 - teamId
 - userId
 - role
@@ -76,6 +82,7 @@
 ## Preference
 
 关键字段：
+
 - notificationsEnabled
 - showMessageDetail
 - soundEnabled

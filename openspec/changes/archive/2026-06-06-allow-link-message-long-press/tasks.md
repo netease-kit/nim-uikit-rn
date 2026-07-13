@@ -1,0 +1,4 @@
+- [x] Inspect RN rich-text link rendering and message bubble long-press handling.
+- [x] Add link-fragment long-press handling that opens the existing message action menu.
+- [x] Preserve normal link tap behavior.
+- [x] Validate TypeScript, target lint, and OpenSpec change.

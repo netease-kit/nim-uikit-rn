@@ -1,12 +1,14 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React, { useMemo, useState } from 'react'
-import { Alert, Pressable, StyleSheet, View } from 'react-native'
+import { Pressable, StyleSheet, TouchableOpacity, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
-import { UIKitPage, UIKitTextInput } from '@/src/NEUIKit/rn'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
+import { UIKitTextInput } from '@/src/NEUIKit/rn'
 import { userStore } from '@/stores'
-import { ensureNetworkAvailable, NETWORK_UNAVAILABLE_MESSAGE } from '@/utils/network'
+import { NETWORK_UNAVAILABLE_MESSAGE } from '@/utils/network'
 
 type FieldConfig = {
   maxLength: number
@@ -15,17 +17,26 @@ type FieldConfig = {
   multiline?: boolean
 }
 
-const fieldConfig: Record<'name' | 'mobile' | 'email' | 'sign', FieldConfig> = {
-  name: { maxLength: 15, keyboardType: 'default', placeholder: '请输入昵称' },
-  mobile: { maxLength: 11, keyboardType: 'number-pad', placeholder: '请输入手机号' },
-  email: { maxLength: 30, keyboardType: 'email-address', placeholder: '请输入邮箱' },
-  sign: { maxLength: 50, keyboardType: 'default', placeholder: '请输入个性签名', multiline: true }
-}
-
 const MyDetailEditScreen = observer(() => {
+  const { t } = useAppTranslation()
   const { field, title } = useLocalSearchParams<{ field?: string; title?: string }>()
   const resolvedField = typeof field === 'string' ? field : 'name'
-  const resolvedTitle = typeof title === 'string' ? title : '编辑'
+  const resolvedTitle = typeof title === 'string' ? title : t('commonEdit')
+  const fieldConfig: Record<'name' | 'mobile' | 'email' | 'sign', FieldConfig> = {
+    name: { maxLength: 15, keyboardType: 'default', placeholder: t('editPlaceholderNickname') },
+    mobile: { maxLength: 11, keyboardType: 'number-pad', placeholder: t('editPlaceholderMobile') },
+    email: {
+      maxLength: 30,
+      keyboardType: 'email-address',
+      placeholder: t('editPlaceholderEmail')
+    },
+    sign: {
+      maxLength: 50,
+      keyboardType: 'default',
+      placeholder: t('editPlaceholderSignature'),
+      multiline: true
+    }
+  }
   const config = fieldConfig[resolvedField as keyof typeof fieldConfig] || fieldConfig.name
   const profileValue =
     userStore.selfProfile?.[resolvedField as keyof NonNullable<typeof userStore.selfProfile>]
@@ -44,7 +55,7 @@ const MyDetailEditScreen = observer(() => {
         : trimmedValue
 
     if (resolvedField === 'mobile' && normalizedValue && !/^\d{1,11}$/.test(normalizedValue)) {
-      Alert.alert('保存失败', '请输入正确的手机号')
+      toast.alert(t('saveFailed'), t('mobileFormatError'))
       return
     }
 
@@ -54,28 +65,30 @@ const MyDetailEditScreen = observer(() => {
       (!normalizedValue.includes('@') ||
         (!normalizedValue.includes('.com') && !normalizedValue.includes('.cn')))
     ) {
-      Alert.alert('保存失败', '请输入正确的邮箱')
+      toast.alert(t('saveFailed'), t('emailFormatError'))
       return
     }
 
     try {
-      await ensureNetworkAvailable()
       await userStore.updateSelfProfile({ [resolvedField]: normalizedValue } as never)
       router.back()
     } catch (error) {
-      Alert.alert('保存失败', error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE)
+      toast.alert(
+        t('saveFailed'),
+        error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE
+      )
     }
   }
 
   return (
-    <UIKitPage style={styles.page}>
+    <View style={styles.page}>
       <Stack.Screen
         options={{
           title: resolvedTitle,
           headerTitleAlign: 'center',
           headerRight: () => (
-            <Pressable onPress={handleSave}>
-              <ThemedText style={styles.headerAction}>完成</ThemedText>
+            <Pressable onPress={() => void handleSave()}>
+              <ThemedText style={styles.saveText}>{t('actionDone')}</ThemedText>
             </Pressable>
           )
         }}
@@ -92,40 +105,42 @@ const MyDetailEditScreen = observer(() => {
           style={[styles.input, config.multiline && styles.inputTall]}
         />
         {canClear ? (
-          <Pressable style={styles.clearButton} onPress={() => setValue('')}>
+          <TouchableOpacity style={styles.clearButton} onPress={() => setValue('')}>
             <ThemedText style={styles.clearText}>×</ThemedText>
-          </Pressable>
+          </TouchableOpacity>
         ) : null}
       </View>
 
       <ThemedText style={styles.counterText}>
         {value.length}/{config.maxLength}
       </ThemedText>
-    </UIKitPage>
+    </View>
   )
 })
 
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    padding: 16
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    backgroundColor: '#EEF2F7'
   },
-  headerAction: {
+  saveText: {
     color: '#337EFF',
-    fontWeight: '700'
+    fontSize: 17,
+    lineHeight: 24
   },
   inputCard: {
     marginTop: 8,
-    borderRadius: 24,
+    borderRadius: 16,
     backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingRight: 14
+    paddingHorizontal: 18
   },
   input: {
     flex: 1,
-    minHeight: 68,
-    paddingHorizontal: 20,
+    minHeight: 72,
     fontSize: 17,
     lineHeight: 24,
     color: '#333333'

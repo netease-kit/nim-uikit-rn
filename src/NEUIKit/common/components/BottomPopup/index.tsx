@@ -104,7 +104,9 @@ const BottomPopup: React.FC<BottomPopupProps> = ({
 
   // 将弹窗渲染到 body 下，避免被其他元素的样式影响
   return createPortal(
-    <div className={`nim-bottom-popup ${visible ? 'nim-bottom-popup-show' : 'nim-bottom-popup-hide'} ${className}`}>
+    <div
+      className={`nim-bottom-popup ${visible ? 'nim-bottom-popup-show' : 'nim-bottom-popup-hide'} ${className}`}
+    >
       <div className="nim-popup-mask" onClick={handleCancel}></div>
       <div className="nim-popup-content">
         {showHeader && (

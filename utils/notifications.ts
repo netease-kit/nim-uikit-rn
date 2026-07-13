@@ -1,4 +1,5 @@
 import Constants from 'expo-constants'
+import { Platform } from 'react-native'
 
 type NotificationPermissionStatus = 'undetermined' | 'denied' | 'granted' | 'unavailable'
 
@@ -27,15 +28,30 @@ type NotificationsModule = {
   }) => void
   getPermissionsAsync?: () => Promise<{ status: NotificationPermissionStatus }>
   requestPermissionsAsync?: () => Promise<{ status: NotificationPermissionStatus }>
+  getDevicePushTokenAsync?: () => Promise<{ type: 'ios' | 'android'; data: string }>
   getLastNotificationResponseAsync?: () => Promise<NotificationResponseLike | null>
   addNotificationResponseReceivedListener?: (
     listener: (response: NotificationResponseLike | null) => void
   ) => {
     remove?: () => void
   }
+  setNotificationChannelAsync?: (
+    channelId: string,
+    channel: {
+      name: string
+      importance: number
+      enableVibrate?: boolean
+      vibrationPattern?: number[]
+      sound?: string | null
+      showBadge?: boolean
+    }
+  ) => Promise<unknown>
+  dismissAllNotificationsAsync?: () => Promise<void>
+  setBadgeCountAsync?: (badgeCount: number) => Promise<boolean>
 }
 
 let cachedModule: NotificationsModule | null | undefined
+export const DEFAULT_NOTIFICATION_CHANNEL_ID = 'im-default'
 
 function shouldSkipNotificationsModule() {
   return !!Constants.expoGoConfig
@@ -88,6 +104,21 @@ export async function requestNotificationPermissions(): Promise<NotificationPerm
   }
 }
 
+export async function getNativeDevicePushToken() {
+  const notifications = getNotificationsModule()
+
+  if (!notifications?.getDevicePushTokenAsync) {
+    return null
+  }
+
+  try {
+    const token = await notifications.getDevicePushTokenAsync()
+    return token?.data ? token : null
+  } catch {
+    return null
+  }
+}
+
 export function configureNotificationHandler(
   handler: () => Promise<{
     shouldPlaySound: boolean
@@ -127,5 +158,50 @@ export function addNotificationResponseListener(
     return notifications.addNotificationResponseReceivedListener(listener)
   } catch {
     return { remove: () => undefined }
+  }
+}
+
+export async function syncNotificationChannel(options: {
+  enabled: boolean
+  soundEnabled: boolean
+  vibrationEnabled: boolean
+}) {
+  if (Platform.OS !== 'android') {
+    return
+  }
+
+  const notifications = getNotificationsModule()
+
+  if (!notifications?.setNotificationChannelAsync) {
+    return
+  }
+
+  try {
+    await notifications.setNotificationChannelAsync(DEFAULT_NOTIFICATION_CHANNEL_ID, {
+      name: 'IM Messages',
+      importance: options.enabled ? 5 : 2,
+      sound: options.enabled && options.soundEnabled ? 'default' : null,
+      enableVibrate: options.enabled && options.vibrationEnabled,
+      vibrationPattern: options.enabled && options.vibrationEnabled ? [0, 250, 200, 250] : [0],
+      showBadge: options.enabled
+    })
+  } catch {
+    // ignore channel sync errors on unsupported runtimes
+  }
+}
+
+export async function clearPresentedNotifications() {
+  const notifications = getNotificationsModule()
+
+  try {
+    await notifications?.dismissAllNotificationsAsync?.()
+  } catch {
+    // ignore cleanup errors
+  }
+
+  try {
+    await notifications?.setBadgeCountAsync?.(0)
+  } catch {
+    // ignore cleanup errors
   }
 }

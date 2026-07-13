@@ -1,18 +1,74 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, View } from 'react-native'
+import {
+  ActivityIndicator,
+  FlatList,
+  ListRenderItemInfo,
+  Pressable,
+  StyleSheet,
+  TouchableOpacity,
+  View
+} from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import {
   UIKitPage,
   UIKitSearchBar,
   UIKitSelectionIndicator,
   UIKitUserAvatar
 } from '@/src/NEUIKit/rn'
-import { friendStore, teamStore, userStore } from '@/stores'
+import { friendStore, nimStore, teamStore, userStore } from '@/stores'
+import { ensureNetworkAvailable, NETWORK_UNAVAILABLE_MESSAGE } from '@/utils/network'
+
+type TeamMemberCandidate = {
+  accountId: string
+  displayName: string
+  type: 'friend'
+}
+
+type TeamMemberRowProps = {
+  item: TeamMemberCandidate
+  isSelected: boolean
+  isLast: boolean
+  onPress: (accountId: string) => void
+}
+
+const TEAM_MEMBER_ROW_HEIGHT = 78
+const TEAM_MEMBER_INITIAL_RENDER_COUNT = 12
+const TEAM_MEMBER_BATCH_RENDER_COUNT = 10
+const TEAM_MEMBER_WINDOW_SIZE = 8
+const MAX_TEAM_INVITE_SELECTION = 200
+
+const TeamMemberRow = React.memo(
+  function TeamMemberRow({ item, isSelected, isLast, onPress }: TeamMemberRowProps) {
+    return (
+      <Pressable
+        style={[styles.row, isLast && styles.rowLast]}
+        onPress={() => onPress(item.accountId)}
+      >
+        <UIKitSelectionIndicator selected={isSelected} />
+        <UIKitUserAvatar account={item.accountId} size={42} />
+        <View style={styles.meta}>
+          <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.rowTitle}>
+            {item.displayName}
+          </ThemedText>
+          <ThemedText style={styles.rowSubtitle}>{item.accountId}</ThemedText>
+        </View>
+      </Pressable>
+    )
+  },
+  (prev, next) =>
+    prev.isSelected === next.isSelected &&
+    prev.isLast === next.isLast &&
+    prev.item.accountId === next.item.accountId &&
+    prev.item.displayName === next.item.displayName
+)
 
 const TeamMemberPickerScreen = observer(() => {
+  const { t } = useAppTranslation()
   const { teamId } = useLocalSearchParams<{ teamId?: string }>()
   const resolvedTeamId = typeof teamId === 'string' ? teamId : ''
   const [keyword, setKeyword] = useState('')
@@ -20,6 +76,10 @@ const TeamMemberPickerScreen = observer(() => {
   const [submitting, setSubmitting] = useState(false)
   const [loading, setLoading] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
+  const currentAccountId = nimStore.getLoginUser()
+  const team = teamStore.getTeam(resolvedTeamId)
+  const memberCount = team?.memberCount || teamStore.getMembers(resolvedTeamId).length
+  const memberLimit = team?.memberLimit || 0
 
   const loadMembers = useCallback(async () => {
     if (!resolvedTeamId) {
@@ -33,62 +93,123 @@ const TeamMemberPickerScreen = observer(() => {
       await teamStore.loadMembers(resolvedTeamId)
     } catch (error) {
       setLoadFailed(true)
-      Alert.alert('加载失败', error instanceof Error ? error.message : '可邀请成员加载失败')
+      toast.alert(
+        t('commonLoadingFailed'),
+        error instanceof Error ? error.message : t('teamInviteCandidatesLoadFailed')
+      )
     } finally {
       setLoading(false)
     }
-  }, [resolvedTeamId])
+  }, [resolvedTeamId, t])
 
   useEffect(() => {
     loadMembers().catch(() => undefined)
   }, [loadMembers])
 
   const normalizedKeyword = keyword.trim().toLowerCase()
+  const localFriendList = friendStore.friendList
+  const blockList = friendStore.blockList
+  const teamMembers = teamStore.getMembers(resolvedTeamId)
+  const blockedAccountIds = useMemo(() => new Set(blockList), [blockList])
+  const existingMemberIds = useMemo(
+    () => new Set(teamMembers.map((item) => item.accountId)),
+    [teamMembers]
+  )
 
   const candidates = useMemo(() => {
-    const existingMemberIds = new Set(
-      teamStore.getMembers(resolvedTeamId).map((item) => item.accountId)
+    const friendCandidates: TeamMemberCandidate[] = localFriendList
+      .filter((friend) => {
+        return (
+          friend.accountId !== currentAccountId &&
+          !existingMemberIds.has(friend.accountId) &&
+          !blockedAccountIds.has(friend.accountId)
+        )
+      })
+      .map((friend) => ({
+        accountId: friend.accountId,
+        displayName:
+          friend.alias || friend.userProfile?.name || userStore.getDisplayName(friend.accountId),
+        type: 'friend'
+      }))
+
+    const mergedCandidates = friendCandidates.filter(
+      (item, index, list) =>
+        list.findIndex((candidate) => candidate.accountId === item.accountId) === index
     )
 
-    return friendStore.friendList.filter((friend) => {
-      if (existingMemberIds.has(friend.accountId)) {
-        return false
-      }
+    if (!normalizedKeyword) {
+      return mergedCandidates
+    }
 
-      if (!normalizedKeyword) {
-        return true
-      }
-
-      const displayName =
-        friend.alias || friend.userProfile?.name || userStore.getDisplayName(friend.accountId)
-
-      return (
-        displayName.toLowerCase().includes(normalizedKeyword) ||
-        friend.accountId.toLowerCase().includes(normalizedKeyword)
-      )
-    })
-  }, [normalizedKeyword, resolvedTeamId])
-
-  const toggleSelect = (accountId: string) => {
-    setSelectedIds((current) =>
-      current.includes(accountId)
-        ? current.filter((item) => item !== accountId)
-        : [...current, accountId]
+    return mergedCandidates.filter((item) =>
+      `${item.displayName} ${item.accountId}`.toLowerCase().includes(normalizedKeyword)
     )
-  }
+  }, [blockedAccountIds, currentAccountId, existingMemberIds, localFriendList, normalizedKeyword])
+
+  const toggleSelect = useCallback(
+    (accountId: string) => {
+      setSelectedIds((current) => {
+        if (current.includes(accountId)) {
+          return current.filter((item) => item !== accountId)
+        }
+
+        if (current.length >= MAX_TEAM_INVITE_SELECTION) {
+          toast.alert(
+            t('commonTip'),
+            t('commonAtMostSelectContacts', { count: MAX_TEAM_INVITE_SELECTION })
+          )
+          return current
+        }
+
+        return [...current, accountId]
+      })
+    },
+    [t]
+  )
+
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
+
+  const renderCandidateItem = useCallback(
+    ({ item, index }: ListRenderItemInfo<TeamMemberCandidate>) => (
+      <TeamMemberRow
+        item={item}
+        isSelected={selectedIdSet.has(item.accountId)}
+        isLast={index === candidates.length - 1}
+        onPress={toggleSelect}
+      />
+    ),
+    [candidates.length, selectedIdSet, toggleSelect]
+  )
 
   const handleInvite = async () => {
     if (selectedIds.length === 0 || submitting) {
       return
     }
 
+    if (selectedIds.length > MAX_TEAM_INVITE_SELECTION) {
+      toast.alert(
+        t('commonTip'),
+        t('commonAtMostSelectContacts', { count: MAX_TEAM_INVITE_SELECTION })
+      )
+      return
+    }
+
+    if (memberLimit > 0 && memberCount + selectedIds.length > memberLimit) {
+      toast.alert(t('commonTip'), t('sdkErrorTeamMemberLimit'))
+      return
+    }
+
     setSubmitting(true)
 
     try {
+      await ensureNetworkAvailable()
       await teamStore.inviteMembers(resolvedTeamId, selectedIds)
       router.back()
     } catch (error) {
-      Alert.alert('邀请失败', error instanceof Error ? error.message : '请稍后重试')
+      toast.alert(
+        t('teamInviteMembersFailed'),
+        error instanceof Error ? error.message : NETWORK_UNAVAILABLE_MESSAGE
+      )
     } finally {
       setSubmitting(false)
     }
@@ -96,83 +217,85 @@ const TeamMemberPickerScreen = observer(() => {
 
   return (
     <UIKitPage style={styles.page}>
-      <Stack.Screen options={{ title: '创建群组', headerTitleAlign: 'center' }} />
+      <Stack.Screen
+        options={{
+          title: t('commonSelect'),
+          headerTitleAlign: 'center',
+          headerRight: () => (
+            <TouchableOpacity
+              disabled={selectedIds.length === 0 || submitting}
+              onPress={() => {
+                handleInvite().catch(() => undefined)
+              }}
+            >
+              <ThemedText
+                style={[
+                  styles.headerAction,
+                  (selectedIds.length === 0 || submitting) && styles.headerActionDisabled
+                ]}
+              >
+                {t('actionDoneWithCount', { count: selectedIds.length })}
+              </ThemedText>
+            </TouchableOpacity>
+          )
+        }}
+      />
 
       <View style={styles.content}>
         <UIKitSearchBar
           value={keyword}
           onChangeText={setKeyword}
-          placeholder="搜索好友"
+          placeholder={t('commonSearchFriendsPlaceholder')}
           style={styles.searchBar}
         />
 
         <View style={styles.summaryRow}>
-          <ThemedText style={styles.summaryTitle}>已选 {selectedIds.length} 人</ThemedText>
-          <ThemedText style={styles.summarySubtitle}>选择后将直接邀请加入群聊</ThemedText>
+          <ThemedText style={styles.summaryTitle}>
+            {t('commonSelectedCount', { count: selectedIds.length })}
+          </ThemedText>
+          <ThemedText style={styles.summarySubtitle}>{t('teamInviteSelectionHint')}</ThemedText>
         </View>
 
         <FlatList
           data={candidates}
           keyExtractor={(item) => item.accountId}
           contentContainerStyle={styles.listContent}
+          removeClippedSubviews
+          initialNumToRender={TEAM_MEMBER_INITIAL_RENDER_COUNT}
+          maxToRenderPerBatch={TEAM_MEMBER_BATCH_RENDER_COUNT}
+          windowSize={TEAM_MEMBER_WINDOW_SIZE}
+          updateCellsBatchingPeriod={16}
+          getItemLayout={(_, index) => ({
+            length: TEAM_MEMBER_ROW_HEIGHT,
+            offset: TEAM_MEMBER_ROW_HEIGHT * index,
+            index
+          })}
           ListEmptyComponent={
             <View style={styles.emptyState}>
               {loading ? (
                 <ActivityIndicator color="#337EFF" />
               ) : loadFailed ? (
                 <>
-                  <ThemedText>可邀请成员加载失败</ThemedText>
+                  <ThemedText>{t('teamInviteCandidatesLoadFailed')}</ThemedText>
                   <Pressable
                     style={styles.retryButton}
                     onPress={() => loadMembers().catch(() => undefined)}
                   >
-                    <ThemedText style={styles.retryText}>重试</ThemedText>
+                    <ThemedText style={styles.retryText}>{t('commonRetry')}</ThemedText>
                   </Pressable>
                 </>
               ) : (
-                <ThemedText>{normalizedKeyword ? '未找到可邀请好友' : '暂无可邀请好友'}</ThemedText>
+                <ThemedText>
+                  {normalizedKeyword
+                    ? t('teamInviteCandidatesNoMatch')
+                    : t('teamInviteCandidatesEmpty')}
+                </ThemedText>
               )}
             </View>
           }
-          renderItem={({ item, index }) => {
-            const displayName =
-              item.alias || item.userProfile?.name || userStore.getDisplayName(item.accountId)
-            const isSelected = selectedIds.includes(item.accountId)
-
-            return (
-              <Pressable
-                style={[styles.row, index === candidates.length - 1 && styles.rowLast]}
-                onPress={() => toggleSelect(item.accountId)}
-              >
-                <UIKitSelectionIndicator selected={isSelected} />
-                <UIKitUserAvatar
-                  account={item.accountId}
-                  avatar={item.userProfile?.avatar}
-                  size={44}
-                />
-                <View style={styles.meta}>
-                  <ThemedText style={styles.rowTitle}>{displayName}</ThemedText>
-                  <ThemedText style={styles.rowSubtitle}>{item.accountId}</ThemedText>
-                </View>
-              </Pressable>
-            )
-          }}
+          renderItem={renderCandidateItem}
+          extraData={selectedIds}
         />
-
-        <Pressable
-          style={[
-            styles.submitButton,
-            (selectedIds.length === 0 || submitting) && styles.submitDisabled
-          ]}
-          onPress={handleInvite}
-          disabled={selectedIds.length === 0 || submitting}
-        >
-          {submitting ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <ThemedText style={styles.submitText}>确定</ThemedText>
-          )}
-        </Pressable>
       </View>
     </UIKitPage>
   )
@@ -188,6 +311,15 @@ const styles = StyleSheet.create({
   },
   searchBar: {
     marginBottom: 12
+  },
+  headerAction: {
+    color: '#337EFF',
+    fontSize: 17,
+    lineHeight: 24,
+    fontWeight: '600'
+  },
+  headerActionDisabled: {
+    color: '#B5BCC7'
   },
   summaryRow: {
     marginBottom: 12,
@@ -254,23 +386,6 @@ const styles = StyleSheet.create({
     color: '#98A1AD',
     fontSize: 13,
     lineHeight: 18
-  },
-  submitButton: {
-    marginTop: 16,
-    minHeight: 50,
-    borderRadius: 25,
-    backgroundColor: '#337EFF',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  submitDisabled: {
-    opacity: 0.45
-  },
-  submitText: {
-    color: '#FFFFFF',
-    fontSize: 17,
-    lineHeight: 24,
-    fontWeight: '600'
   }
 })
 

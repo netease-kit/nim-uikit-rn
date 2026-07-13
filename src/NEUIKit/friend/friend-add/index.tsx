@@ -135,7 +135,9 @@ const FriendAdd: React.FC = observer(() => {
         <div className="user-wrapper">
           <Avatar className="user-avatar" account={userInfo?.accountId || ''} />
           <div className="user-info">
-            <div className="user-nick">{(userInfo && userInfo.name) || (userInfo && userInfo.accountId)}</div>
+            <div className="user-nick">
+              {(userInfo && userInfo.name) || (userInfo && userInfo.accountId)}
+            </div>
             <div className="user-id">{userInfo && userInfo.accountId}</div>
           </div>
 

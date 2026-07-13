@@ -2,13 +2,36 @@ import { makeAutoObservable, runInAction } from 'mobx'
 
 import { NIMConfig } from '@/constants/NIMConfig'
 import { loginRegisterByCode, requestLoginSmsCode } from '@/services/auth'
+import { getConfirmedOfflineMessage } from '@/utils/network'
 import type { V2NIMKickedOfflineDetail } from '@/utils/nim-sdk'
 import { storage } from '@/utils/storage'
 
+import { conversationStore } from './ConversationStore'
+import { friendStore } from './FriendStore'
+import { imStoreV2Bridge } from './ImStoreV2Bridge'
+import { messageStore } from './MessageStore'
 import { nimStore } from './NIMStore'
+import { teamStore } from './TeamStore'
+import { userStore } from './UserStore'
 
 const MOBILE_REG = /^(13[0-9]|14[01456879]|15[0-35-9]|16[2567]|17[0-8]|18[0-9]|19[0-35-9])\d{8}$/
 const SMS_REG = /^\d+$/
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+
+  if (typeof error === 'object' && error) {
+    const candidate = error as Record<string, unknown>
+    const message = candidate.errMsg ?? candidate.msg ?? candidate.message
+    if (typeof message === 'string' && message.trim()) {
+      return message
+    }
+  }
+
+  return fallback
+}
 
 export type AuthSession = {
   mobile: string
@@ -21,6 +44,7 @@ class AuthStore {
   session: AuthSession | null = null
   isReady = false
   isBootstrapping = false
+  isSessionRestoring = false
   isLoggingIn = false
   isRequestingSms = false
   smsCountdown = 0
@@ -30,6 +54,7 @@ class AuthStore {
   kickedOfflineDetail: V2NIMKickedOfflineDetail | null = null
 
   private countdownTimer: ReturnType<typeof setInterval> | null = null
+  private sessionSwitchPromise: Promise<void> | null = null
 
   constructor() {
     makeAutoObservable(this, {}, { autoBind: true })
@@ -38,6 +63,10 @@ class AuthStore {
 
   get isAuthenticated() {
     return !!this.session
+  }
+
+  get hasValidatedSession() {
+    return !!this.session && !this.isSessionRestoring && this.loginStatus === 1
   }
 
   get isKickedOffline() {
@@ -49,7 +78,8 @@ class AuthStore {
   }
 
   validateSmsCode(code: string) {
-    return SMS_REG.test(code.trim())
+    const normalizedCode = code.trim()
+    return SMS_REG.test(normalizedCode) && normalizedCode.length > 0 && normalizedCode.length <= 6
   }
 
   private startSmsCountdown() {
@@ -85,10 +115,11 @@ class AuthStore {
       if (saved?.account && saved?.token) {
         runInAction(() => {
           this.session = saved
+          this.isSessionRestoring = true
           this.kickedOfflineDetail = null
         })
 
-        this.restoreNimLogin(saved)
+        await this.restoreNimLogin(saved)
       }
     } finally {
       runInAction(() => {
@@ -104,6 +135,7 @@ class AuthStore {
       await nimStore.login(saved.account, saved.token, false)
       runInAction(() => {
         this.loginStatus = 1
+        this.isSessionRestoring = false
       })
     } catch {
       await this.clearPersistedSession()
@@ -132,6 +164,14 @@ class AuthStore {
         this.startSmsCountdown()
       })
       return result
+    } catch (error) {
+      console.warn('[auth] requestSmsCode failed', {
+        mobile: normalizedMobile,
+        message: getErrorMessage(error, '验证码获取失败'),
+        error
+      })
+
+      throw error
     } finally {
       runInAction(() => {
         this.isRequestingSms = false
@@ -144,16 +184,54 @@ class AuthStore {
     const normalizedCode = smsCode.trim()
 
     if (!this.validateMobile(normalizedMobile) || !this.validateSmsCode(normalizedCode)) {
-      throw new Error('手机号或验证码错误')
+      throw new Error(
+        !this.validateMobile(normalizedMobile) ? '请输入正确的手机号' : '请输入正确的验证码'
+      )
     }
 
     runInAction(() => {
       this.isLoggingIn = true
     })
 
+    const loginStartedAt = Date.now()
+    console.log('[auth] loginWithSms:start', {
+      mobile: normalizedMobile,
+      startedAt: loginStartedAt
+    })
+
     try {
+      const sessionSwitchStartedAt = Date.now()
+      await this.prepareForSessionSwitch()
+      console.log('[auth] loginWithSms:prepareForSessionSwitch:done', {
+        mobile: normalizedMobile,
+        durationMs: Date.now() - sessionSwitchStartedAt
+      })
+
+      const authApiStartedAt = Date.now()
       const result = await loginRegisterByCode(normalizedMobile, normalizedCode)
-      await nimStore.login(result.imAccid, result.imToken, true)
+      console.log('[auth] loginWithSms:loginRegisterByCode:done', {
+        mobile: normalizedMobile,
+        imAccid: result.imAccid,
+        durationMs: Date.now() - authApiStartedAt
+      })
+      try {
+        const nimLoginStartedAt = Date.now()
+        await nimStore.login(result.imAccid, result.imToken, true)
+        console.log('[auth] loginWithSms:nimLogin:done', {
+          mobile: normalizedMobile,
+          account: result.imAccid,
+          durationMs: Date.now() - nimLoginStartedAt
+        })
+      } catch (error) {
+        const offlineMessage = await getConfirmedOfflineMessage()
+        const message = offlineMessage ?? getErrorMessage(error, '登录失败')
+        console.warn('[auth] nim login failed', {
+          account: result.imAccid,
+          message,
+          error
+        })
+        throw new Error(message)
+      }
 
       const nextSession: AuthSession = {
         mobile: normalizedMobile,
@@ -162,14 +240,35 @@ class AuthStore {
         accessToken: result.accessToken
       }
 
+      const persistStartedAt = Date.now()
       await storage.setJson(NIMConfig.storageKeys.authSession, nextSession)
+      console.log('[auth] loginWithSms:persistSession:done', {
+        mobile: normalizedMobile,
+        account: result.imAccid,
+        durationMs: Date.now() - persistStartedAt
+      })
 
       runInAction(() => {
         this.session = nextSession
         this.loginStatus = 1
+        this.isSessionRestoring = false
         this.pendingRegistration = false
         this.kickedOfflineDetail = null
       })
+
+      console.log('[auth] loginWithSms:success', {
+        mobile: normalizedMobile,
+        account: result.imAccid,
+        totalDurationMs: Date.now() - loginStartedAt
+      })
+    } catch (error) {
+      console.warn('[auth] loginWithSms failed', {
+        mobile: normalizedMobile,
+        message: getErrorMessage(error, '登录失败'),
+        totalDurationMs: Date.now() - loginStartedAt,
+        error
+      })
+      throw error
     } finally {
       runInAction(() => {
         this.isLoggingIn = false
@@ -193,27 +292,99 @@ class AuthStore {
     runInAction(() => {
       this.kickedOfflineDetail = detail
     })
-    await this.clearPersistedSession()
+    await this.clearPersistedSession(true)
   }
 
-  async clearPersistedSession() {
+  private async prepareForSessionSwitch() {
+    if (this.sessionSwitchPromise) {
+      await this.sessionSwitchPromise
+      return
+    }
+
+    this.sessionSwitchPromise = (async () => {
+      const startedAt = Date.now()
+      const hasLocalSession = !!this.session
+      const hasNIMSession = nimStore.isLoggedIn()
+
+      console.log('[auth] prepareForSessionSwitch:start', {
+        hasLocalSession,
+        hasNIMSession
+      })
+
+      if (!hasLocalSession && !hasNIMSession) {
+        console.log('[auth] prepareForSessionSwitch:skip', {
+          durationMs: Date.now() - startedAt
+        })
+        return
+      }
+
+      if (hasNIMSession) {
+        try {
+          const logoutStartedAt = Date.now()
+          await nimStore.logout()
+          console.log('[auth] prepareForSessionSwitch:logoutPreviousNim:done', {
+            durationMs: Date.now() - logoutStartedAt
+          })
+        } catch (error) {
+          console.warn('[auth] logout previous nim session failed during account switch', error)
+        }
+      }
+
+      const clearStartedAt = Date.now()
+      await this.clearPersistedSession(true)
+      console.log('[auth] prepareForSessionSwitch:clearPersistedSession:done', {
+        durationMs: Date.now() - clearStartedAt
+      })
+      console.log('[auth] prepareForSessionSwitch:done', {
+        durationMs: Date.now() - startedAt
+      })
+    })()
+
+    try {
+      await this.sessionSwitchPromise
+    } finally {
+      this.sessionSwitchPromise = null
+    }
+  }
+
+  async clearPersistedSession(resetIMState = false) {
     await storage.remove(NIMConfig.storageKeys.authSession)
+
+    if (resetIMState) {
+      imStoreV2Bridge.destroy()
+    }
+
+    friendStore.resetState()
+    conversationStore.resetState()
+    messageStore.resetState()
+    teamStore.resetState()
+    userStore.resetState()
+
     runInAction(() => {
       this.session = null
       this.loginStatus = 0
+      this.isSessionRestoring = false
       this.pendingRegistration = false
+      this.pendingConversationId = null
+      this.kickedOfflineDetail = null
     })
   }
 
   async logout() {
-    await this.clearPersistedSession()
+    const hadNIMSession = nimStore.isLoggedIn()
+
+    if (hadNIMSession) {
+      try {
+        await nimStore.logout()
+      } catch (error) {
+        console.warn('NIM logout failed before local session cleared', error)
+      }
+    }
+
+    await this.clearPersistedSession(true)
     runInAction(() => {
       this.loginStatus = 0
       this.kickedOfflineDetail = null
-    })
-
-    nimStore.logout().catch((error) => {
-      console.warn('NIM logout failed after local session cleared', error)
     })
   }
 }

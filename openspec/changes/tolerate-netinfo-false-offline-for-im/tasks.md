@@ -1,0 +1,4 @@
+- [x] Locate the delete-friend network precheck and compare it with message sending readiness.
+- [x] Add an IM SDK online fallback to the shared network availability helper.
+- [x] Register the fallback from NIMStore without creating store import cycles.
+- [x] Validate TypeScript, lint target files, and OpenSpec change.

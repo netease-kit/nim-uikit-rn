@@ -1,0 +1,5 @@
+- [x] 1. Sync the current `im2-rn-demo` source into `release/v10.0.0` with generated and local-signing files excluded
+- [x] 2. Remove bundled shared `AppKey` and push certificate defaults from runtime config
+- [x] 3. Make NIM/bootstrap and SMS auth fail fast when `AppKey` is missing
+- [x] 4. Add a sanitized integration guide and refresh the top-level README entrypoints
+- [x] 5. Validate formatting, typecheck, OpenSpec, and Expo startup expectations

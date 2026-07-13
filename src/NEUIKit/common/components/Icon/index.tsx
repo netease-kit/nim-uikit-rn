@@ -352,7 +352,15 @@ export interface IconProps {
  * @param props 组件属性
  * @returns Icon组件
  */
-const Icon: React.FC<IconProps> = ({ type, size = 16, width, height, iconClassName = '', style = {}, onClick }) => {
+const Icon: React.FC<IconProps> = ({
+  type,
+  size = 16,
+  width,
+  height,
+  iconClassName = '',
+  style = {},
+  onClick
+}) => {
   // 获取图标URL
   const iconUrl = urlMap[type]
 

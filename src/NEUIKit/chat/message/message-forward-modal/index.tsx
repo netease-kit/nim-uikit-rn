@@ -29,7 +29,15 @@ interface MessageForwardModalProps {
  * 消息转发模态框组件
  */
 const MessageForwardModal: React.FC<MessageForwardModalProps> = observer(
-  ({ forwardModalVisible, forwardTo, forwardMsg, forwardConversationType, forwardToTeamInfo, onConfirm, onCancel }) => {
+  ({
+    forwardModalVisible,
+    forwardTo,
+    forwardMsg,
+    forwardConversationType,
+    forwardToTeamInfo,
+    onConfirm,
+    onCancel
+  }) => {
     const { t } = useTranslation()
     const { store } = useStateContext()
 
@@ -75,9 +83,14 @@ const MessageForwardModal: React.FC<MessageForwardModalProps> = observer(
         onConfirm={handleConfirm}
       >
         <div className="message-forward-modal-wrapper">
-          {forwardConversationType === V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM ? (
+          {forwardConversationType ===
+          V2NIMConst.V2NIMConversationType.V2NIM_CONVERSATION_TYPE_TEAM ? (
             <div className="avatar-wrapper">
-              <Avatar account={forwardToTeamInfo?.teamId || ''} avatar={forwardToTeamInfo?.avatar} size="36" />
+              <Avatar
+                account={forwardToTeamInfo?.teamId || ''}
+                avatar={forwardToTeamInfo?.avatar}
+                size="36"
+              />
               <div className="name">{forwardToTeamInfo?.name || ''}</div>
             </div>
           ) : (

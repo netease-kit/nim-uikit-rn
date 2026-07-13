@@ -1,0 +1,6 @@
+- [x] Inspect chat audio/file bubble rendering and outside-composer press handling.
+- [x] Add OpenSpec requirements for audio/file layout and voice composer dismissal.
+- [x] Align audio duration next to voice icon near sender avatar.
+- [x] Keep file extension/type adjacent to non-overflowing file names.
+- [x] Ensure blank-area taps dismiss idle voice recording panel without interrupting active recording.
+- [x] Validate TypeScript, lint target files, and OpenSpec change.

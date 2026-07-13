@@ -113,7 +113,7 @@ export const emojiMap: IKeyMap = {
   [t('ill')]: 'icon-a-34',
   [t('Mad')]: 'icon-a-35',
   [t('Ghost')]: 'icon-a-36',
-  [t('Angry')]: 'icon-a-37',
+  [t('Huff')]: 'icon-a-37',
   [t('Angry')]: 'icon-a-38',
   [t('Unhappy')]: 'icon-a-39',
   [t('Frown')]: 'icon-a-40',
@@ -141,17 +141,116 @@ export const emojiMap: IKeyMap = {
   [t('NoWords')]: 'icon-a-62',
   [t('Monkey')]: 'icon-a-63',
   [t('Bomb')]: 'icon-a-64',
-  [t('Sleep')]: 'icon-a-65',
+  [t('Sleeping')]: 'icon-a-65',
   [t('Cloud')]: 'icon-a-66',
   [t('Rocket')]: 'icon-a-67',
   [t('Ambulance')]: 'icon-a-68',
   [t('Poop')]: 'icon-a-70'
 }
 
+const EMOJI_ALIAS_ICON_MAP_CONFIG: IKeyMap = {
+  '[Laugh]': 'icon-a-1',
+  '[Happy]': 'icon-a-2',
+  '[Sexy]': 'icon-a-3',
+  '[Cool]': 'icon-a-4',
+  '[Mischievous]': 'icon-a-5',
+  '[Kiss]': 'icon-a-6',
+  '[Spit]': 'icon-a-7',
+  '[Squint]': 'icon-a-8',
+  '[Cute]': 'icon-a-9',
+  '[Grimace]': 'icon-a-10',
+  '[Snicker]': 'icon-a-11',
+  '[Joy]': 'icon-a-12',
+  '[Ecstasy]': 'icon-a-13',
+  '[Surprise]': 'icon-a-14',
+  '[Tears]': 'icon-a-15',
+  '[Sweat]': 'icon-a-16',
+  '[Angle]': 'icon-a-17',
+  '[Funny]': 'icon-a-18',
+  '[Awkward]': 'icon-a-19',
+  '[Thrill]': 'icon-a-20',
+  '[Cry]': 'icon-a-21',
+  '[Fretting]': 'icon-a-22',
+  '[Terrorist]': 'icon-a-23',
+  '[Halo]': 'icon-a-24',
+  '[Shame]': 'icon-a-25',
+  '[Sleep]': 'icon-a-26',
+  '[Tired]': 'icon-a-27',
+  '[Mask]': 'icon-a-28',
+  '[ok]': 'icon-a-29',
+  '[All right]': 'icon-a-30',
+  '[AllRight]': 'icon-a-30',
+  '[Despise]': 'icon-a-31',
+  '[Uncomfortable]': 'icon-a-32',
+  '[Disdain]': 'icon-a-33',
+  '[ill]': 'icon-a-34',
+  '[Mad]': 'icon-a-35',
+  '[Ghost]': 'icon-a-36',
+  '[Huff]': 'icon-a-37',
+  '[huff]': 'icon-a-37',
+  '[Angry]': 'icon-a-38',
+  '[Unhappy]': 'icon-a-39',
+  '[Frown]': 'icon-a-40',
+  '[Broken]': 'icon-a-41',
+  '[Beckoning]': 'icon-a-42',
+  '[Ok]': 'icon-a-43',
+  '[Low]': 'icon-a-44',
+  '[Nice]': 'icon-a-45',
+  '[Applause]': 'icon-a-46',
+  '[Good job]': 'icon-a-47',
+  '[GoodJob]': 'icon-a-47',
+  '[Hit]': 'icon-a-48',
+  '[Please]': 'icon-a-49',
+  '[Bye]': 'icon-a-50',
+  '[First]': 'icon-a-51',
+  '[Fist]': 'icon-a-52',
+  '[Give me five]': 'icon-a-53',
+  '[GiveMeFive]': 'icon-a-53',
+  '[Knife]': 'icon-a-54',
+  '[Hi]': 'icon-a-55',
+  '[No]': 'icon-a-56',
+  '[Hold]': 'icon-a-57',
+  '[Think]': 'icon-a-58',
+  '[Pig]': 'icon-a-59',
+  '[No listen]': 'icon-a-60',
+  '[NoListen]': 'icon-a-60',
+  '[No look]': 'icon-a-61',
+  '[NoLook]': 'icon-a-61',
+  '[No words]': 'icon-a-62',
+  '[NoWords]': 'icon-a-62',
+  '[Monkey]': 'icon-a-63',
+  '[Bomb]': 'icon-a-64',
+  '[Sleeping]': 'icon-a-65',
+  '[Cloud]': 'icon-a-66',
+  '[Rocket]': 'icon-a-67',
+  '[Ambulance]': 'icon-a-68',
+  '[Poop]': 'icon-a-70'
+}
+
+export const EMOJI_RENDER_ICON_MAP_CONFIG: IKeyMap = {
+  ...EMOJI_ICON_MAP_CONFIG,
+  ...emojiMap,
+  ...EMOJI_ALIAS_ICON_MAP_CONFIG
+}
+
 // 创建正则表达式，用于匹配表情符号
 export const emojiRegExp = new RegExp(
   '(' +
     Object.keys(EMOJI_ICON_MAP_CONFIG)
+      .map((item) => {
+        const left = `\\${item.slice(0, 1)}`
+        const right = `\\${item.slice(-1)}`
+        const mid = item.slice(1, -1)
+        return `${left}${mid}${right}`
+      })
+      .join('|') +
+    ')',
+  'g'
+)
+
+export const emojiRenderRegExp = new RegExp(
+  '(' +
+    Object.keys(EMOJI_RENDER_ICON_MAP_CONFIG)
       .map((item) => {
         const left = `\\${item.slice(0, 1)}`
         const right = `\\${item.slice(-1)}`

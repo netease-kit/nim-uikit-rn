@@ -1,17 +1,14 @@
 import { router, Stack } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React, { useCallback, useEffect, useState } from 'react'
-import {
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  StyleSheet,
-  TouchableOpacity,
-  View
-} from 'react-native'
+import { ActivityIndicator, FlatList, StyleSheet, TouchableOpacity, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { useNavigationLock } from '@/hooks/useNavigationLock'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import {
+  getUIKitAppellation,
   UIKitEmptyState,
   UIKitIcon,
   UIKitOutlineButton,
@@ -20,8 +17,16 @@ import {
   UIKitWhitePage
 } from '@/src/NEUIKit/rn'
 import { friendStore, userStore } from '@/stores'
+import { ensureNetworkAvailable } from '@/utils/network'
+
+const BLACKLIST_ROW_HEIGHT = 90
+const BLACKLIST_INITIAL_RENDER_COUNT = 10
+const BLACKLIST_BATCH_RENDER_COUNT = 8
+const BLACKLIST_WINDOW_SIZE = 8
 
 const BlacklistScreen = observer(() => {
+  const { t } = useAppTranslation()
+  const { runWithNavigationLock } = useNavigationLock()
   const [loading, setLoading] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
 
@@ -34,11 +39,14 @@ const BlacklistScreen = observer(() => {
       await userStore.fetchUsers(friendStore.blockList)
     } catch (error) {
       setLoadFailed(true)
-      Alert.alert('加载失败', error instanceof Error ? error.message : '黑名单加载失败')
+      toast.alert(
+        t('commonLoadingFailed'),
+        error instanceof Error ? error.message : t('contactsBlacklistLoadFailed')
+      )
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     loadBlacklist().catch(() => undefined)
@@ -48,43 +56,62 @@ const BlacklistScreen = observer(() => {
     <UIKitWhitePage style={styles.container}>
       <Stack.Screen
         options={{
-          title: '黑名单',
+          title: t('contactsBlacklistTitle'),
           headerTitleAlign: 'center',
           headerShown: true,
           headerRight: () => (
-            <TouchableOpacity onPress={() => router.push('/friend/add' as never)}>
-              <UIKitIcon type="icon-tianjiaanniu" size={28} tintColor="#333333" />
+            <TouchableOpacity
+              style={styles.headerButton}
+              onPress={() =>
+                runWithNavigationLock(() => {
+                  router.push('/contacts/blacklist-picker' as never)
+                })
+              }
+            >
+              <UIKitIcon type="icon-addition" size={22} tintColor="#333333" />
             </TouchableOpacity>
           )
         }}
       />
-      <ThemedText style={styles.tipText}>你不会收到列表中任何联系人的消息</ThemedText>
+      <ThemedText style={styles.tipText}>{t('contactsBlacklistTip')}</ThemedText>
       <FlatList
         data={friendStore.blockList}
         keyExtractor={(item) => item}
+        removeClippedSubviews
+        initialNumToRender={BLACKLIST_INITIAL_RENDER_COUNT}
+        maxToRenderPerBatch={BLACKLIST_BATCH_RENDER_COUNT}
+        windowSize={BLACKLIST_WINDOW_SIZE}
+        updateCellsBatchingPeriod={16}
+        getItemLayout={(_, index) => ({
+          length: BLACKLIST_ROW_HEIGHT,
+          offset: BLACKLIST_ROW_HEIGHT * index,
+          index
+        })}
         ListEmptyComponent={
           <View style={styles.emptyState}>
             {loading ? (
               <ActivityIndicator color="#337EFF" />
             ) : loadFailed ? (
               <>
-                <ThemedText style={styles.emptyBodyText}>黑名单加载失败</ThemedText>
+                <ThemedText style={styles.emptyBodyText}>
+                  {t('contactsBlacklistLoadFailed')}
+                </ThemedText>
                 <TouchableOpacity style={styles.retryButton} onPress={loadBlacklist}>
-                  <ThemedText style={styles.retryButtonText}>重试</ThemedText>
+                  <ThemedText style={styles.retryButtonText}>{t('commonRetry')}</ThemedText>
                 </TouchableOpacity>
               </>
             ) : (
-              <UIKitEmptyState title="暂无黑名单成员" />
+              <UIKitEmptyState title={t('contactsBlacklistEmpty')} />
             )}
           </View>
         }
         renderItem={({ item, index }) => {
-          const displayName = userStore.getDisplayName(item, item)
+          const displayName = getUIKitAppellation({ account: item }) || item
 
           return (
             <View style={styles.rowWrap}>
               <View style={styles.row}>
-                <UIKitUserAvatar account={item} size={54} />
+                <UIKitUserAvatar account={item} size={42} />
                 <View style={styles.meta}>
                   <ThemedText numberOfLines={1} style={styles.nameText}>
                     {displayName}
@@ -96,27 +123,19 @@ const BlacklistScreen = observer(() => {
                   ) : null}
                 </View>
                 <UIKitOutlineButton
-                  label="解除"
+                  label={t('commonRemove')}
                   style={styles.button}
-                  onPress={() =>
-                    Alert.alert('移出黑名单', '确认将该联系人移出黑名单？', [
-                      { text: '取消', style: 'cancel' },
-                      {
-                        text: '确定',
-                        style: 'destructive',
-                        onPress: async () => {
-                          try {
-                            await friendStore.removeFromBlockList(item)
-                          } catch (error) {
-                            Alert.alert(
-                              '操作失败',
-                              error instanceof Error ? error.message : '请稍后重试'
-                            )
-                          }
-                        }
-                      }
-                    ])
-                  }
+                  onPress={async () => {
+                    try {
+                      await ensureNetworkAvailable()
+                      await friendStore.removeFromBlockList(item)
+                    } catch (error) {
+                      toast.alert(
+                        t('commonActionFailed'),
+                        error instanceof Error ? error.message : t('commonNetworkUnavailable')
+                      )
+                    }
+                  }}
                 />
               </View>
               {index < friendStore.blockList.length - 1 ? <UIKitRowDivider /> : null}
@@ -140,6 +159,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 10
+  },
+  headerButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   emptyState: {
     flex: 1,

@@ -1,5 +1,4 @@
 import { t } from './i18n'
-import { V2NIMConst } from 'nim-web-sdk-ng/dist/esm/nim'
 
 // 自定义的一些事件常量
 export const events = {
@@ -66,10 +65,10 @@ export const AT_ALL_ACCOUNT = 'ait_all'
 export const ALLOW_AT = 'yxAllowAt'
 
 export const REPLY_MSG_TYPE_MAP: { [key: number]: string } = {
-  [V2NIMConst.V2NIMMessageType.V2NIM_MESSAGE_TYPE_IMAGE]: t('imgMsgText'),
-  [V2NIMConst.V2NIMMessageType.V2NIM_MESSAGE_TYPE_AUDIO]: t('audioMsgText'),
-  [V2NIMConst.V2NIMMessageType.V2NIM_MESSAGE_TYPE_VIDEO]: t('videoMsgText'),
-  [V2NIMConst.V2NIMMessageType.V2NIM_MESSAGE_TYPE_FILE]: t('fileMsgText')
+  1: t('imgMsgText'),
+  2: t('audioMsgText'),
+  3: t('videoMsgText'),
+  6: t('fileMsgText')
 }
 
 export const STORAGE_KEY = '__yx_im_options__h5'

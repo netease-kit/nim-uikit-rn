@@ -1,161 +1,165 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { observer } from 'mobx-react-lite'
 import React from 'react'
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
 
 import { ThemedText } from '@/components/ThemedText'
+import { useAppTranslation } from '@/hooks/useAppTranslation'
+import { useNavigationLock } from '@/hooks/useNavigationLock'
+import { toast } from '@/src/NEUIKit/common/utils/toast'
 import {
   getUIKitAppellation,
-  UIKitIcon,
+  resolveUIKitProfileRoute,
   UIKitInfoRow,
   UIKitPage,
   UIKitRowDivider,
   UIKitSwitchRow,
   UIKitUserAvatar
 } from '@/src/NEUIKit/rn'
-import { conversationStore, friendStore, nimStore } from '@/stores'
+import { conversationStore, friendStore, imStoreV2Bridge, nimStore } from '@/stores'
+import { getDisplayErrorMessage } from '@/utils/error-message'
+import { ensureNetworkAvailable, getConfirmedOfflineMessage } from '@/utils/network'
+
+function getConversationForSettings(conversationId: string) {
+  return (
+    imStoreV2Bridge.getConversation(conversationId) ||
+    conversationStore.getConversation(conversationId)
+  )
+}
+
+function getConversationMutationStore() {
+  const preferCloudConversation = !!imStoreV2Bridge.rootStore?.sdkOptions?.enableV2CloudConversation
+  const localConversationStore = imStoreV2Bridge.rootStore?.localConversationStore
+  const cloudConversationStore = imStoreV2Bridge.rootStore?.conversationStore
+
+  if (preferCloudConversation && cloudConversationStore) {
+    return cloudConversationStore
+  }
+
+  return localConversationStore || cloudConversationStore || null
+}
 
 const P2PSettingsScreen = observer(() => {
+  const { t } = useAppTranslation()
   const { conversationId } = useLocalSearchParams<{ conversationId?: string }>()
   const resolvedConversationId = typeof conversationId === 'string' ? conversationId : ''
-  const conversation = conversationStore.getConversation(resolvedConversationId)
+  const conversation = getConversationForSettings(resolvedConversationId)
   const targetAccountId =
     nimStore.nim?.V2NIMConversationIdUtil.parseConversationTargetId(resolvedConversationId)
   const friend = targetAccountId ? friendStore.friends.get(targetAccountId) : null
+  const { runWithNavigationLock } = useNavigationLock()
   const displayName = targetAccountId
     ? getUIKitAppellation({ account: targetAccountId }) || targetAccountId
-    : conversation?.name || '聊天设置'
-  const isBlocked = !!targetAccountId && friendStore.blockList.includes(targetAccountId)
+    : conversation?.name || t('p2pSettingsTitle')
+
+  const handleOpenProfileCard = async () => {
+    if (!targetAccountId) {
+      return
+    }
+
+    const pathname = await resolveUIKitProfileRoute(targetAccountId)
+    runWithNavigationLock(() => {
+      router.push({
+        pathname,
+        params: { accountId: targetAccountId }
+      } as never)
+    })
+  }
 
   const handleToggleMute = async (value: boolean) => {
     try {
+      await ensureNetworkAvailable()
       await conversationStore.toggleMute(resolvedConversationId, !value)
+      await imStoreV2Bridge.refreshCurrentConversationSource()
     } catch (error) {
-      Alert.alert('设置失败', error instanceof Error ? error.message : '请稍后重试')
+      const offlineMessage = await getConfirmedOfflineMessage()
+      toast.alert(
+        t('settingsUpdateFailed'),
+        offlineMessage || getDisplayErrorMessage(error, t('commonRetryLater'))
+      )
     }
   }
 
   const handleToggleStickTop = async (value: boolean) => {
     try {
+      await ensureNetworkAvailable()
+      const conversationMutationStore = getConversationMutationStore()
+
+      if (conversationMutationStore) {
+        await imStoreV2Bridge.stickTopActiveConversation(resolvedConversationId, value)
+        return
+      }
+
       await conversationStore.toggleStickTop(resolvedConversationId, value)
     } catch (error) {
-      Alert.alert('设置失败', error instanceof Error ? error.message : '请稍后重试')
-    }
-  }
-
-  const handleToggleBlock = async (value: boolean) => {
-    if (!targetAccountId) {
-      return
-    }
-
-    try {
-      if (value) {
-        await friendStore.addToBlockList(targetAccountId)
-      } else {
-        await friendStore.removeFromBlockList(targetAccountId)
-      }
-    } catch (error) {
-      Alert.alert('设置失败', error instanceof Error ? error.message : '请稍后重试')
+      const offlineMessage = await getConfirmedOfflineMessage()
+      toast.alert(
+        t('settingsUpdateFailed'),
+        offlineMessage || getDisplayErrorMessage(error, t('commonRetryLater'))
+      )
     }
   }
 
   return (
     <UIKitPage style={styles.page}>
-      <Stack.Screen options={{ title: '聊天设置', headerTitleAlign: 'center' }} />
+      <Stack.Screen options={{ title: t('p2pSettingsTitle'), headerTitleAlign: 'center' }} />
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.heroCardContent}>
-          <UIKitUserAvatar
-            account={targetAccountId || displayName}
-            avatar={friend?.userProfile?.avatar || conversation?.avatar}
-            size={64}
-          />
-          <View style={styles.heroMeta}>
-            <ThemedText style={styles.displayName}>{displayName}</ThemedText>
-            <ThemedText style={styles.accountText}>
-              账号：{targetAccountId || conversation?.name || '-'}
+          <Pressable style={styles.peerItem} onPress={handleOpenProfileCard}>
+            <UIKitUserAvatar
+              account={targetAccountId || displayName}
+              avatar={friend?.userProfile?.avatar || conversation?.avatar}
+              size={38}
+            />
+            <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.displayName}>
+              {displayName}
             </ThemedText>
-          </View>
+          </Pressable>
           <Pressable
             style={styles.addButton}
             onPress={() =>
-              router.push({
-                pathname: '/conversation/picker',
-                params: { seedAccountId: targetAccountId || '' }
-              } as never)
+              runWithNavigationLock(() => {
+                router.push({
+                  pathname: '/conversation/picker',
+                  params: { seedAccountId: targetAccountId || '' }
+                } as never)
+              })
             }
           >
-            <UIKitIcon type="icon-tianjiahaoyou" size={22} tintColor="#B7C0CC" />
+            <View style={styles.memberAddCircle}>
+              <ThemedText style={styles.memberAddText}>+</ThemedText>
+            </View>
+            <View style={styles.memberAddNameSpacer} />
           </Pressable>
         </View>
 
         <View style={styles.card}>
           <UIKitInfoRow
-            label="标记"
+            label={t('commonMessageMark')}
             value=""
             showChevron
             onPress={() =>
-              router.push({
-                pathname: '/chat/pins',
-                params: { conversationId: resolvedConversationId }
-              } as never)
+              runWithNavigationLock(() => {
+                router.push({
+                  pathname: '/chat/pins',
+                  params: { conversationId: resolvedConversationId }
+                } as never)
+              })
             }
           />
           <UIKitRowDivider />
           <UIKitSwitchRow
-            label="开启消息提醒"
+            label={t('commonEnableMessageNotification')}
             value={!conversation?.mute}
             onValueChange={handleToggleMute}
           />
           <UIKitRowDivider />
           <UIKitSwitchRow
-            label="聊天置顶"
+            label={t('commonChatStickTop')}
             value={!!conversation?.stickTop}
             onValueChange={handleToggleStickTop}
           />
-          {targetAccountId ? (
-            <>
-              <UIKitRowDivider />
-              <UIKitSwitchRow
-                label="加入黑名单"
-                value={isBlocked}
-                onValueChange={handleToggleBlock}
-              />
-            </>
-          ) : null}
-        </View>
-
-        <View style={styles.card}>
-          <UIKitInfoRow
-            label="历史记录"
-            value=""
-            showChevron
-            onPress={() =>
-              router.push({
-                pathname: '/chat/history',
-                params: {
-                  conversationId: resolvedConversationId,
-                  title: displayName
-                }
-              } as never)
-            }
-          />
-          {targetAccountId ? (
-            <>
-              <UIKitRowDivider />
-              <UIKitInfoRow
-                label="查看好友名片"
-                value=""
-                showChevron
-                onPress={() =>
-                  router.push({
-                    pathname: '/friend/friend-card',
-                    params: { accountId: targetAccountId }
-                  } as never)
-                }
-              />
-            </>
-          ) : null}
         </View>
       </ScrollView>
     </UIKitPage>
@@ -174,35 +178,48 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 18,
-    paddingVertical: 20,
+    paddingTop: 18,
+    paddingBottom: 16,
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16
+    alignItems: 'flex-start',
+    gap: 12
   },
-  heroMeta: {
-    flex: 1
+  peerItem: {
+    width: 64,
+    alignItems: 'center',
+    gap: 6
   },
   displayName: {
     color: '#333333',
-    fontSize: 18,
-    lineHeight: 26,
-    fontWeight: '600'
-  },
-  accountText: {
-    marginTop: 8,
-    color: '#98A1AD',
-    fontSize: 15,
-    lineHeight: 22
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+    width: '100%'
   },
   addButton: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    borderWidth: 2,
+    width: 56,
+    alignItems: 'center',
+    gap: 6
+  },
+  memberAddCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
     borderColor: '#D0D8E4',
     borderStyle: 'dashed',
     alignItems: 'center',
     justifyContent: 'center'
+  },
+  memberAddText: {
+    color: '#98A1AD',
+    fontSize: 20,
+    lineHeight: 22,
+    fontWeight: '400'
+  },
+  memberAddNameSpacer: {
+    width: '100%',
+    height: 18
   },
   card: {
     borderRadius: 24,
